@@ -186,10 +186,23 @@ function render() {
   }).join('');
 
   body.querySelectorAll('.st-row').forEach((row) => {
-    row.addEventListener('click', () => {
-      // 单击只选中,不播放
-      document.querySelectorAll('.st-row').forEach(r => r.classList.remove('selected'));
-      row.classList.add('selected');
+    row.addEventListener('click', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl/Cmd+单击:切换该行选中,保留其他已选
+        row.classList.toggle('selected');
+      } else if (e.shiftKey) {
+        // Shift+单击:选中从上一个选中行到当前行的区间
+        const rows = Array.from(body.querySelectorAll('.st-row'));
+        const cur = rows.indexOf(row);
+        let last = rows.findIndex((r) => r.classList.contains('selected'));
+        if (last < 0) last = cur;
+        const [a, b] = [Math.min(last, cur), Math.max(last, cur)];
+        for (let i = a; i <= b; i++) rows[i].classList.add('selected');
+      } else {
+        // 普通单击:只选中这一行
+        document.querySelectorAll('.st-row').forEach((r) => r.classList.remove('selected'));
+        row.classList.add('selected');
+      }
     });
     row.addEventListener('dblclick', () => playPath(row.dataset.path));
     row.addEventListener('contextmenu', (e) => {
@@ -341,7 +354,32 @@ function deleteSong(path) {
   render();
 }
 
-// ===== 重复歌曲查找 =====
+// 批量删除(全选/多选后按 Delete):一次性处理并只渲染一次
+function deleteSongs(paths) {
+  if (!paths || !paths.length) return;
+  const set = new Set(paths);
+  // 若正在播放的歌在删除列表里,先停掉
+  if (currentPath && set.has(currentPath)) {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    currentPath = null;
+    $('now-title').textContent = '未播放';
+    $('now-artist').textContent = '选择一首歌曲开始';
+    $('now-cover').classList.remove('rotating');
+  }
+  library = library.filter((s) => !set.has(s.filePath));
+  favorites = favorites.filter((p) => !set.has(p));
+  recent = recent.filter((p) => !set.has(p));
+  playlists.forEach((pl) => { pl.songs = pl.songs.filter((p) => !set.has(p)); });
+  paths.forEach((p) => { delete coverCache[p]; });
+  saveLib();
+  LS.set('favorites', favorites);
+  LS.set('recent', recent);
+  LS.set('playlists', playlists);
+  renderPlaylists();
+  render();
+}
 // 归一化:去空格、转小写,用于判断标题+歌手是否相同
 function dupKey(s) {
   const norm = (x) => (x || '').toString().trim().toLowerCase().replace(/\s+/g, '');
@@ -1304,9 +1342,19 @@ document.addEventListener('keydown', (e) => {
   else if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); view = 'search'; render(); $('search-input').focus(); }
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A') && !typing) {
     // Ctrl+A 全选当前列表所有歌曲(在线视图不适用)
-    if (view === 'online' || view === 'recommend') return;
+    if (view === 'online' || view === 'recommend' || view.startsWith('opl:')) return;
     e.preventDefault();
     document.querySelectorAll('.st-row').forEach((r) => r.classList.add('selected'));
+  }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+    // 删除选中的歌曲(本地视图);在线视图不支持
+    if (view === 'online' || view === 'recommend' || view.startsWith('opl:')) return;
+    const sel = Array.from(document.querySelectorAll('.st-row.selected'))
+      .map((r) => r.dataset.path).filter(Boolean);
+    if (!sel.length) return;
+    e.preventDefault();
+    if (!confirm(`确定从音乐库删除选中的 ${sel.length} 首歌吗?(不会删除磁盘文件)`)) return;
+    deleteSongs(sel);
   }
 });
 
