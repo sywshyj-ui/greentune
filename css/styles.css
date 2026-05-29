@@ -510,19 +510,35 @@ body {
 
 /* ===== 头像可点击 + 鼓励语 ===== */
 .now-cover { cursor: pointer; }
-/* 鼓励性话语:显示在主内容区右上角空白处,字号是最大字号(28px)的 2 倍 = 56px */
+/* 鼓励性话语:可拖动、可调整大小的浮动文本 */
 #cheer-toast {
   position: fixed; right: 80px; top: 120px;
-  transform: scale(0.8);
-  z-index: 4000; pointer-events: none;
-  max-width: 500px; text-align: right;
+  z-index: 4000;
+  max-width: 600px; min-width: 200px;
+  padding: 20px;
   font-size: 56px; font-weight: 800; line-height: 1.25;
   color: var(--green);
   text-shadow: 0 4px 24px rgba(0,0,0,0.7), 0 0 30px rgba(29,185,84,0.4);
   opacity: 0;
-  transition: opacity 0.4s ease, transform 0.4s ease;
+  pointer-events: none; /* 隐藏时不拦截下层点击(否则隐形盒子会挡住搜索框/歌曲) */
+  cursor: move; /* 鼠标变成移动图标 */
+  user-select: none;
+  transition: opacity 0.4s ease;
+  background: rgba(0,0,0,0.3); /* 半透明背景便于看清边界 */
+  border-radius: 12px;
+  border: 2px solid transparent;
 }
-#cheer-toast.show { opacity: 1; transform: scale(1); }
+#cheer-toast.show { opacity: 1; pointer-events: auto; } /* 显示时才可交互/拖动 */
+#cheer-toast:hover { border-color: var(--green); }
+/* 右下角调整大小手柄 */
+#cheer-toast::after {
+  content: '⋰';
+  position: absolute; right: 4px; bottom: 4px;
+  font-size: 20px; color: var(--text-muted);
+  cursor: nwse-resize;
+  opacity: 0.5;
+}
+#cheer-toast:hover::after { opacity: 1; }
 
 /* ===== 重复歌曲弹窗 ===== */
 .dup-box { width: 560px; max-width: 92%; }

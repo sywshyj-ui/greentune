@@ -897,23 +897,79 @@ $('like-btn').addEventListener('click', () => {
   toggleFav(currentPath);
 });
 
-// ===== 点击头像显示鼓励性话语 =====
+// ===== 点击头像显示鼓励性话语(可拖动、可调整大小) =====
 const CHEER_WORDS = [
   '你超棒的!', '今天也要加油哦', '相信自己,你可以的', '保持热爱,奔赴山海',
   '慢慢来,比较快', '你已经很努力了', '世界因你而美好', '继续闪闪发光吧',
   '一切都会好起来的', '你值得所有美好', '勇敢的人先享受世界', '愿你被生活温柔以待'
 ];
 let cheerTimer = null;
+const cheerToast = $('cheer-toast');
+
+// 恢复上次保存的位置和字号
+const savedCheer = LS.get('cheerPos', null);
+if (savedCheer) {
+  if (savedCheer.left != null) { cheerToast.style.left = savedCheer.left + 'px'; cheerToast.style.right = 'auto'; }
+  if (savedCheer.top != null) cheerToast.style.top = savedCheer.top + 'px';
+  if (savedCheer.size) cheerToast.style.fontSize = savedCheer.size + 'px';
+}
+
+function saveCheerPos() {
+  LS.set('cheerPos', {
+    left: parseInt(cheerToast.style.left) || null,
+    top: parseInt(cheerToast.style.top) || null,
+    size: parseInt(cheerToast.style.fontSize) || 56
+  });
+}
+
 $('now-cover').addEventListener('click', () => {
-  const toast = $('cheer-toast');
   const word = CHEER_WORDS[Math.floor(Math.random() * CHEER_WORDS.length)];
-  toast.textContent = word;
-  // 重新触发动画
-  toast.classList.remove('show');
-  void toast.offsetWidth;
-  toast.classList.add('show');
+  cheerToast.textContent = word;
+  cheerToast.classList.remove('show');
+  void cheerToast.offsetWidth;
+  cheerToast.classList.add('show');
   clearTimeout(cheerTimer);
-  cheerTimer = setTimeout(() => toast.classList.remove('show'), 10000); // 10 秒后消失
+  cheerTimer = setTimeout(() => cheerToast.classList.remove('show'), 10000);
+});
+
+// 拖动 + 调整大小逻辑
+let dragMode = null; // 'move' | 'resize'
+let startX, startY, startLeft, startTop, startSize;
+
+cheerToast.addEventListener('mousedown', (e) => {
+  clearTimeout(cheerTimer); // 交互时不让它消失
+  const rect = cheerToast.getBoundingClientRect();
+  // 判断是否点在右下角 24px 区域内 → 调整大小
+  const nearCorner = (e.clientX > rect.right - 28) && (e.clientY > rect.bottom - 28);
+  dragMode = nearCorner ? 'resize' : 'move';
+  startX = e.clientX; startY = e.clientY;
+  startLeft = rect.left; startTop = rect.top;
+  startSize = parseInt(getComputedStyle(cheerToast).fontSize) || 56;
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!dragMode) return;
+  if (dragMode === 'move') {
+    cheerToast.style.left = (startLeft + e.clientX - startX) + 'px';
+    cheerToast.style.top = (startTop + e.clientY - startY) + 'px';
+    cheerToast.style.right = 'auto';
+  } else if (dragMode === 'resize') {
+    // 拖右下角:向右下增大字号,范围 20~160px
+    const delta = (e.clientX - startX + e.clientY - startY) / 2;
+    const newSize = Math.max(20, Math.min(160, startSize + delta * 0.4));
+    cheerToast.style.fontSize = newSize + 'px';
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (dragMode) {
+    saveCheerPos();
+    dragMode = null;
+    // 交互结束后重新计时 10 秒消失
+    clearTimeout(cheerTimer);
+    cheerTimer = setTimeout(() => cheerToast.classList.remove('show'), 10000);
+  }
 });
 
 // 静音
