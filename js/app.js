@@ -31,19 +31,16 @@ let audioCtx = null;
 let analyser = null;
 let source = null;
 let dataArray = null;
-
-// 均衡器
-let eqFilters = [];
+let eqFilters = []; // 10 段均衡器滤波器
 const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const EQ_PRESETS = {
   flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-  pop: [1, 2, 3, 2, 0, -1, -1, 0, 1, 2],
-  rock: [3, 2, 1, 0, -1, -1, 0, 1, 2, 3],
-  jazz: [2, 1, 0, 1, 2, 2, 1, 0, 1, 2],
-  classical: [2, 1, 0, 0, 0, 0, -1, -1, -2, -2],
+  pop: [1, 3, 5, 3, 0, -1, -1, 0, 1, 2],
+  rock: [4, 3, 1, -1, -2, 0, 2, 3, 4, 4],
+  jazz: [3, 2, 1, 1, -1, -1, 0, 1, 2, 3],
+  classical: [3, 2, 0, 0, -1, -1, 0, 1, 2, 3],
   vocal: [-1, -2, -2, 1, 3, 3, 2, 1, 0, -1]
 };
-let eqGains = LS.get('eqGains', EQ_PRESETS.flat);
 
 // ---- 工具 ----
 const fmt = (s) => {
@@ -291,6 +288,40 @@ function closeContextMenu() {
 }
 document.addEventListener('click', closeContextMenu);
 document.addEventListener('scroll', closeContextMenu, true);
+
+// ===== 频谱可视化 =====
+function drawVisualizer() {
+  const canvas = $('visualizer');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (!analyser || !dataArray) return;
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(0, 0, w, h);
+
+    const barCount = 16;
+    const barWidth = w / barCount;
+    const step = Math.floor(dataArray.length / barCount);
+
+    for (let i = 0; i < barCount; i++) {
+      const val = dataArray[i * step] / 255;
+      const barHeight = val * h * 0.9;
+      const x = i * barWidth;
+      const y = h - barHeight;
+
+      // 绿色渐变
+      const green = audio.paused ? '#3a3a3a' : `rgba(29, 185, 84, ${0.6 + val * 0.4})`;
+      ctx.fillStyle = green;
+      ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
+    }
+  }
+  draw();
+}
 
 function renderPlaylists() {
   const list = $('pl-list');
