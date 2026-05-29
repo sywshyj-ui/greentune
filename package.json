@@ -1,0 +1,18 @@
+{
+  "name": "greentune",
+  "version": "1.0.0",
+  "description": "GreenTune - 现代音乐播放器 (Spotify 绿色风格)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "小q",
+  "license": "MIT",
+  "dependencies": {
+    "iconv-lite": "^0.6.3",
+    "jsmediatags": "^3.9.7"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0"
+  }
+}
