@@ -51,6 +51,16 @@ ipcMain.handle('pick-folder', async () => {
   return Promise.all(files.map(readMeta));
 });
 
+// 拖拽进来的文件:按路径读元数据,过滤非音频
+ipcMain.handle('read-meta', async (_e, paths) => {
+  if (!Array.isArray(paths)) return [];
+  const audio = paths.filter((p) => {
+    const ext = (p.split('.').pop() || '').toLowerCase();
+    return AUDIO_EXTS.includes(ext);
+  });
+  return Promise.all(audio.map(readMeta));
+});
+
 function scanDir(dir) {
   let out = [];
   let entries = [];

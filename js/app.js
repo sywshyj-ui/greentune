@@ -23,6 +23,8 @@ let playMode = LS.get('playMode', 'list'); // list|shuffle|one|all
 let isSeeking = false;
 let lrc = null;
 let lrcIdx = -1;
+let sortKey = LS.get('sortKey', '');       // ''|title|artist|album|duration
+let sortAsc = LS.get('sortAsc', true);
 
 // ---- 工具 ----
 const fmt = (s) => {
@@ -45,20 +47,38 @@ function coverHTML(path, fallback = '🎵') {
 const VIEW_TITLES = { home: '主页', search: '搜索结果', library: '音乐库', favorites: '我喜欢', recent: '最近播放' };
 
 function computeQueue() {
-  if (view === 'favorites') return favorites.filter(byPath);
-  if (view === 'recent') return recent.filter(byPath);
-  if (view.startsWith('pl:')) {
+  let paths;
+  if (view === 'favorites') paths = favorites.filter(byPath);
+  else if (view === 'recent') paths = recent.filter(byPath);
+  else if (view.startsWith('pl:')) {
     const pl = playlists.find((p) => p.id === view.slice(3));
-    return pl ? pl.songs.filter(byPath) : [];
+    paths = pl ? pl.songs.filter(byPath) : [];
   }
-  if (view === 'search') {
+  else if (view === 'search') {
     const q = $('search-input').value.trim().toLowerCase();
-    if (!q) return library.map((s) => s.filePath);
-    return library.filter((s) =>
-      (s.title + s.artist + s.album + s.genre).toLowerCase().includes(q)
-    ).map((s) => s.filePath);
+    paths = !q ? library.map((s) => s.filePath)
+      : library.filter((s) =>
+          (s.title + s.artist + s.album + s.genre).toLowerCase().includes(q)
+        ).map((s) => s.filePath);
   }
-  return library.map((s) => s.filePath); // home + library
+  else paths = library.map((s) => s.filePath); // home + library
+
+  // 排序(recent 默认保留时间序,除非用户主动排序)
+  if (sortKey && view !== 'recent') paths = sortPaths(paths);
+  return paths;
+}
+
+function sortPaths(paths) {
+  const dir = sortAsc ? 1 : -1;
+  return [...paths].sort((a, b) => {
+    const sa = byPath(a), sb = byPath(b);
+    if (!sa || !sb) return 0;
+    let va, vb;
+    if (sortKey === 'duration') { va = sa.duration || 0; vb = sb.duration || 0; return (va - vb) * dir; }
+    va = (sa[sortKey] || '').toString().toLowerCase();
+    vb = (sb[sortKey] || '').toString().toLowerCase();
+    return va.localeCompare(vb, 'zh') * dir;
+  });
 }
 
 function render() {
@@ -122,8 +142,136 @@ function render() {
 
   body.querySelectorAll('.st-row').forEach((row) => {
     row.addEventListener('click', () => playPath(row.dataset.path));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, row.dataset.path);
+    });
+  });
+
+  updateSortIndicators();
+}
+
+// ===== 排序 =====
+function updateSortIndicators() {
+  document.querySelectorAll('.st-head .st-col[data-sort]').forEach((col) => {
+    const k = col.dataset.sort;
+    col.classList.toggle('sorted', sortKey === k);
+    const arrow = col.querySelector('.sort-arrow');
+    if (arrow) arrow.textContent = sortKey === k ? (sortAsc ? ' ▲' : ' ▼') : '';
   });
 }
+
+function setSort(key) {
+  if (sortKey === key) sortAsc = !sortAsc;
+  else { sortKey = key; sortAsc = true; }
+  LS.set('sortKey', sortKey);
+  LS.set('sortAsc', sortAsc);
+  render();
+}
+
+// ===== 歌曲管理 =====
+function toggleFav(path) {
+  if (favorites.includes(path)) favorites = favorites.filter((p) => p !== path);
+  else favorites = [path, ...favorites];
+  LS.set('favorites', favorites);
+  if (path === currentPath) {
+    $('like-btn').classList.toggle('liked', favorites.includes(path));
+    $('like-btn').textContent = favorites.includes(path) ? '♥' : '♡';
+  }
+  renderPlaylists();
+  render();
+}
+
+function addToPlaylist(path, plId) {
+  const pl = playlists.find((p) => p.id === plId);
+  if (!pl) return;
+  if (!pl.songs.includes(path)) pl.songs.push(path);
+  LS.set('playlists', playlists);
+  renderPlaylists();
+  if (view === 'pl:' + plId) render();
+}
+
+function removeFromPlaylist(path, plId) {
+  const pl = playlists.find((p) => p.id === plId);
+  if (!pl) return;
+  pl.songs = pl.songs.filter((p) => p !== path);
+  LS.set('playlists', playlists);
+  renderPlaylists();
+  render();
+}
+
+function deleteSong(path) {
+  library = library.filter((s) => s.filePath !== path);
+  favorites = favorites.filter((p) => p !== path);
+  recent = recent.filter((p) => p !== path);
+  playlists.forEach((pl) => { pl.songs = pl.songs.filter((p) => p !== path); });
+  delete coverCache[path];
+  saveLib();
+  LS.set('favorites', favorites);
+  LS.set('recent', recent);
+  LS.set('playlists', playlists);
+  renderPlaylists();
+  render();
+}
+
+// ===== 右键上下文菜单 =====
+function showContextMenu(x, y, path) {
+  closeContextMenu();
+  const s = byPath(path);
+  if (!s) return;
+  const liked = favorites.includes(path);
+  const inPl = view.startsWith('pl:') ? view.slice(3) : null;
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+
+  const items = [];
+  items.push({ label: '▶ 播放', fn: () => playPath(path) });
+  items.push({ label: liked ? '♥ 取消喜欢' : '♡ 添加到喜欢', fn: () => toggleFav(path) });
+  items.push({ label: '＋ 加入歌单…', sub: playlists.length ? playlists.map((p) => ({
+    label: p.name, fn: () => addToPlaylist(path, p.id)
+  })) : [{ label: '(暂无歌单,先新建)', disabled: true }] });
+  if (inPl) items.push({ label: '✕ 从此歌单移除', fn: () => removeFromPlaylist(path, inPl) });
+  items.push({ sep: true });
+  items.push({ label: '🗑 从音乐库删除', danger: true, fn: () => deleteSong(path) });
+
+  menu.innerHTML = items.map((it, i) => {
+    if (it.sep) return '<div class="ctx-sep"></div>';
+    const cls = ['ctx-item'];
+    if (it.danger) cls.push('danger');
+    if (it.sub) cls.push('has-sub');
+    const sub = it.sub ? `<div class="ctx-sub">${it.sub.map((s2, j) =>
+      `<div class="ctx-item ${s2.disabled ? 'disabled' : ''}" data-sub="${i}-${j}">${esc(s2.label)}</div>`
+    ).join('')}</div>` : '';
+    return `<div class="${cls.join(' ')}" data-i="${i}">${esc(it.label)}${it.sub ? '<span class="ctx-arrow">▸</span>' : ''}${sub}</div>`;
+  }).join('');
+
+  document.body.appendChild(menu);
+  // 定位,避免溢出屏幕
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+
+  menu.querySelectorAll('.ctx-item[data-i]').forEach((el) => {
+    const it = items[+el.dataset.i];
+    if (it.sub || it.disabled) return;
+    el.addEventListener('click', (e) => { e.stopPropagation(); it.fn(); closeContextMenu(); });
+  });
+  menu.querySelectorAll('.ctx-item[data-sub]').forEach((el) => {
+    const [i, j] = el.dataset.sub.split('-').map(Number);
+    const s2 = items[i].sub[j];
+    if (s2.disabled) return;
+    el.addEventListener('click', (e) => { e.stopPropagation(); s2.fn(); closeContextMenu(); });
+  });
+}
+
+function closeContextMenu() {
+  const m = $('ctx-menu');
+  if (m) m.remove();
+}
+document.addEventListener('click', closeContextMenu);
+document.addEventListener('scroll', closeContextMenu, true);
 
 function renderPlaylists() {
   const list = $('pl-list');
@@ -138,13 +286,59 @@ function renderPlaylists() {
       <div class="pl-meta"><span class="pl-name">最近播放</span><span class="pl-sub">${recent.length} 首</span></div>
     </div>`;
   const custom = playlists.map((p) => `
-    <div class="pl-item" data-view="pl:${p.id}">
+    <div class="pl-item" data-view="pl:${p.id}" data-pl-id="${p.id}">
       <span class="pl-ico">🎵</span>
       <div class="pl-meta"><span class="pl-name">${esc(p.name)}</span><span class="pl-sub">${p.songs.length} 首</span></div>
     </div>`).join('');
   list.innerHTML = fixed + custom;
   list.querySelectorAll('.pl-item').forEach((el) => {
     el.addEventListener('click', () => { view = el.dataset.view; render(); });
+    const plId = el.dataset.plId;
+    if (plId) {
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showPlaylistMenu(e.clientX, e.clientY, plId);
+      });
+    }
+  });
+}
+
+// ===== 歌单右键菜单 =====
+function showPlaylistMenu(x, y, plId) {
+  closeContextMenu();
+  const pl = playlists.find((p) => p.id === plId);
+  if (!pl) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `
+    <div class="ctx-item" data-action="rename">✏ 重命名</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" data-action="delete">🗑 删除歌单</div>
+  `;
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+
+  menu.querySelector('[data-action="rename"]').addEventListener('click', () => {
+    closeContextMenu();
+    const name = prompt('重命名歌单:', pl.name);
+    if (name && name.trim()) {
+      pl.name = name.trim();
+      LS.set('playlists', playlists);
+      renderPlaylists();
+      if (view === 'pl:' + plId) render();
+    }
+  });
+  menu.querySelector('[data-action="delete"]').addEventListener('click', () => {
+    closeContextMenu();
+    if (!confirm(`确定删除歌单「${pl.name}」吗?`)) return;
+    playlists = playlists.filter((p) => p.id !== plId);
+    LS.set('playlists', playlists);
+    if (view === 'pl:' + plId) { view = 'home'; render(); }
+    renderPlaylists();
   });
 }
 
@@ -375,13 +569,7 @@ function applyModeUI() {
 
 $('like-btn').addEventListener('click', () => {
   if (!currentPath) return;
-  if (favorites.includes(currentPath)) favorites = favorites.filter((p) => p !== currentPath);
-  else favorites = [currentPath, ...favorites];
-  LS.set('favorites', favorites);
-  $('like-btn').classList.toggle('liked', favorites.includes(currentPath));
-  $('like-btn').textContent = favorites.includes(currentPath) ? '♥' : '♡';
-  renderPlaylists();
-  if (view === 'favorites') render();
+  toggleFav(currentPath);
 });
 
 // 静音
@@ -426,6 +614,41 @@ $('add-music').addEventListener('contextmenu', async (e) => {
   if (songs && songs.length) importSongs(songs);
 });
 
+// 拖拽导入:拖文件到窗口即导入
+const dropOverlay = document.createElement('div');
+dropOverlay.id = 'drop-overlay';
+dropOverlay.innerHTML = '<div class="drop-hint">🎵 松手即可导入音乐</div>';
+document.body.appendChild(dropOverlay);
+
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.classList.add('show');
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlay.classList.remove('show');
+});
+window.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.classList.remove('show');
+  const files = Array.from(e.dataTransfer.files || []);
+  if (!files.length) return;
+  const paths = files.map((f) => window.api.pathForFile(f)).filter(Boolean);
+  if (!paths.length) return;
+  const songs = await window.api.readMeta(paths);
+  if (songs && songs.length) importSongs(songs);
+});
+
+// 表头排序
+document.querySelectorAll('.st-head .st-col[data-sort]').forEach((col) => {
+  col.addEventListener('click', () => setSort(col.dataset.sort));
+});
+
 // 新建歌单
 $('create-pl').addEventListener('click', () => { $('pl-modal').hidden = false; $('pl-name-input').value=''; $('pl-name-input').focus(); });
 $('pl-cancel').addEventListener('click', () => { $('pl-modal').hidden = true; });
@@ -454,6 +677,23 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp' && !typing) { e.preventDefault(); volume = Math.min(1, (audio.volume||0) + 0.05); audio.volume = volume; volBar.apply(volume); LS.set('volume', volume); }
   else if (e.key === 'ArrowDown' && !typing) { e.preventDefault(); volume = Math.max(0, (audio.volume||0) - 0.05); audio.volume = volume; volBar.apply(volume); LS.set('volume', volume); }
   else if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); view = 'search'; render(); $('search-input').focus(); }
+});
+
+// ===== 拖拽导入 =====
+document.body.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+document.body.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const files = Array.from(e.dataTransfer.files);
+  if (!files.length) return;
+  const paths = files.map((f) => window.api.pathForFile(f)).filter(Boolean);
+  if (!paths.length) return;
+  const songs = await window.api.readMeta(paths);
+  if (songs && songs.length) importSongs(songs);
+});
+
+// ===== 表头排序绑定 =====
+document.querySelectorAll('.st-head .st-col[data-sort]').forEach((col) => {
+  col.addEventListener('click', () => setSort(col.dataset.sort));
 });
 
 // ===== 初始化 =====
