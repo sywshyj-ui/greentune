@@ -927,7 +927,16 @@ $('vol-btn').addEventListener('click', () => {
 document.querySelectorAll('.nav-main .nav-item').forEach((n) => {
   n.addEventListener('click', () => {
     view = n.dataset.view;
-    if (view === 'search' || view === 'online') setTimeout(() => $('search-input').focus(), 50);
+    if (view === 'search' || view === 'online') {
+      // 延迟聚焦,确保 render 完成后再聚焦
+      setTimeout(() => {
+        const input = $('search-input');
+        if (input) {
+          input.disabled = false; // 确保未被禁用
+          input.focus();
+        }
+      }, 100);
+    }
     if (view === 'online') { $('search-input').placeholder = '搜索在线音乐…'; }
     else { $('search-input').placeholder = '搜索歌曲、艺术家、专辑'; }
     if (view === 'recommend') loadRecommendations();
