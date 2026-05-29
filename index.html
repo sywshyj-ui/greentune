@@ -120,6 +120,7 @@
   <footer class="player">
     <div class="player-left">
       <div class="now-cover" id="now-cover">🎵</div>
+      <canvas id="visualizer" width="120" height="56"></canvas>
       <div class="now-meta">
         <div class="now-title" id="now-title">未播放</div>
         <div class="now-artist" id="now-artist">选择一首歌曲开始</div>
@@ -177,6 +178,27 @@
       <div class="modal-actions">
         <button class="ghost-btn" id="pl-cancel">取消</button>
         <button class="primary-btn" id="pl-confirm">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 均衡器弹窗 -->
+  <div class="modal" id="eq-modal" hidden>
+    <div class="modal-box eq-box">
+      <h3>均衡器</h3>
+      <div class="eq-presets">
+        <button class="eq-preset-btn" data-preset="flat">平直</button>
+        <button class="eq-preset-btn" data-preset="pop">流行</button>
+        <button class="eq-preset-btn" data-preset="rock">摇滚</button>
+        <button class="eq-preset-btn" data-preset="jazz">爵士</button>
+        <button class="eq-preset-btn" data-preset="classical">古典</button>
+        <button class="eq-preset-btn" data-preset="vocal">人声</button>
+      </div>
+      <div class="eq-sliders" id="eq-sliders">
+        <!-- 10 个频段滑块,JS 动态生成 -->
+      </div>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="eq-close">关闭</button>
       </div>
     </div>
   </div>

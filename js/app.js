@@ -26,6 +26,25 @@ let lrcIdx = -1;
 let sortKey = LS.get('sortKey', '');       // ''|title|artist|album|duration
 let sortAsc = LS.get('sortAsc', true);
 
+// Web Audio 频谱
+let audioCtx = null;
+let analyser = null;
+let source = null;
+let dataArray = null;
+
+// 均衡器
+let eqFilters = [];
+const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const EQ_PRESETS = {
+  flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  pop: [1, 2, 3, 2, 0, -1, -1, 0, 1, 2],
+  rock: [3, 2, 1, 0, -1, -1, 0, 1, 2, 3],
+  jazz: [2, 1, 0, 1, 2, 2, 1, 0, 1, 2],
+  classical: [2, 1, 0, 0, 0, 0, -1, -1, -2, -2],
+  vocal: [-1, -2, -2, 1, 3, 3, 2, 1, 0, -1]
+};
+let eqGains = LS.get('eqGains', EQ_PRESETS.flat);
+
 // ---- 工具 ----
 const fmt = (s) => {
   if (!s || isNaN(s)) return '0:00';
@@ -350,6 +369,32 @@ function playPath(path) {
   audio.src = 'file://' + path.replace(/\\/g, '/').replace(/#/g, '%23');
   audio.play().catch((e) => console.error('play error', e));
 
+  // Web Audio 频谱初始化(首次播放时)
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 64; // 32 个频段
+    source = audioCtx.createMediaElementSource(audio);
+
+    // 均衡器滤波器链
+    let prev = source;
+    for (let i = 0; i < EQ_BANDS.length; i++) {
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking';
+      filter.frequency.value = EQ_BANDS[i];
+      filter.Q.value = 1;
+      filter.gain.value = eqGains[i];
+      prev.connect(filter);
+      eqFilters.push(filter);
+      prev = filter;
+    }
+
+    prev.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    drawVisualizer();
+  }
+
   // 现在播放信息
   $('now-title').textContent = s.title;
   $('now-artist').textContent = s.artist;
@@ -416,14 +461,80 @@ async function loadLyrics(path) {
   lrc = null; lrcIdx = -1;
   const box = $('lp-lyrics');
   box.innerHTML = '<p class="lp-placeholder">正在加载歌词…</p>';
-  const data = await window.api.loadLrc(path);
-  if (path !== currentPath) return; // 已切歌
+
+  // 先尝试本地
+  let data = await window.api.loadLrc(path);
+  if (path !== currentPath) return;
+
+  // 本地没有,尝试在线搜索
   if (!data || !data.length) {
-    box.innerHTML = '<p class="lp-placeholder">暂无歌词（放一个同名 .lrc 文件即可）</p>';
+    const s = byPath(path);
+    if (s && s.title && s.artist) {
+      box.innerHTML = '<p class="lp-placeholder">本地无歌词,正在联网搜索…</p>';
+      data = await searchOnlineLyrics(s.title, s.artist);
+      if (path !== currentPath) return;
+    }
+  }
+
+  if (!data || !data.length) {
+    box.innerHTML = '<p class="lp-placeholder">暂无歌词（放一个同名 .lrc 文件,或联网自动搜索）</p>';
     return;
   }
   lrc = data;
   box.innerHTML = data.map((l, i) => `<p data-i="${i}">${esc(l.text)}</p>`).join('');
+}
+
+// 在线歌词搜索(网易云 API,无需 key)
+async function searchOnlineLyrics(title, artist) {
+  const cacheKey = `lrc_${title}_${artist}`;
+  const cached = LS.get(cacheKey, null);
+  if (cached) return cached;
+
+  try {
+    // 搜索歌曲
+    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(title + ' ' + artist)}&type=1&limit=1`;
+    const searchRes = await fetch(searchUrl, { method: 'GET' });
+    const searchData = await searchRes.json();
+    if (!searchData.result?.songs?.[0]?.id) return null;
+
+    const songId = searchData.result.songs[0].id;
+    // 获取歌词
+    const lrcUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=-1`;
+    const lrcRes = await fetch(lrcUrl, { method: 'GET' });
+    const lrcData = await lrcRes.json();
+    if (!lrcData.lrc?.lyric) return null;
+
+    // 解析 LRC
+    const lines = parseLRC(lrcData.lrc.lyric);
+    if (lines.length) {
+      LS.set(cacheKey, lines); // 缓存
+      return lines;
+    }
+  } catch (e) {
+    console.error('在线歌词获取失败:', e);
+  }
+  return null;
+}
+
+function parseLRC(text) {
+  const lines = [];
+  const re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  for (const raw of text.split(/\r?\n/)) {
+    const tags = [];
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(raw)) !== null) {
+      const min = parseInt(m[1], 10);
+      const sec = parseInt(m[2], 10);
+      const frac = m[3] ? parseInt(m[3].padEnd(3, '0'), 10) : 0;
+      tags.push(min * 60 + sec + frac / 1000);
+    }
+    const content = raw.replace(re, '').trim();
+    if (tags.length && content) {
+      for (const time of tags) lines.push({ time, text: content });
+    }
+  }
+  return lines.sort((a, b) => a.time - b.time);
 }
 
 function syncLyrics(t) {
@@ -695,6 +806,91 @@ document.body.addEventListener('drop', async (e) => {
 document.querySelectorAll('.st-head .st-col[data-sort]').forEach((col) => {
   col.addEventListener('click', () => setSort(col.dataset.sort));
 });
+
+// ===== 频谱可视化 =====
+function drawVisualizer() {
+  const canvas = $('visualizer');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (!analyser || !dataArray) return;
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(0, 0, W, H);
+
+    const barCount = 20;
+    const barWidth = W / barCount;
+    const step = Math.floor(dataArray.length / barCount);
+
+    for (let i = 0; i < barCount; i++) {
+      const val = dataArray[i * step] || 0;
+      const barHeight = (val / 255) * H * 0.9;
+      const x = i * barWidth;
+      const y = H - barHeight;
+      const hue = 140; // 绿色
+      ctx.fillStyle = audio.paused ? '#3a3a3a' : `hsl(${hue}, 70%, ${45 + val / 255 * 20}%)`;
+      ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
+    }
+  }
+  draw();
+}
+
+// ===== 均衡器 =====
+function initEQ() {
+  const container = $('eq-sliders');
+  container.innerHTML = EQ_BANDS.map((freq, i) => {
+    const label = freq >= 1000 ? (freq / 1000) + 'k' : freq + '';
+    return `<div class="eq-band">
+      <span class="eq-value" id="eq-val-${i}">0dB</span>
+      <input type="range" class="eq-slider" id="eq-${i}" min="-12" max="12" step="1" value="${eqGains[i]}">
+      <span class="eq-label">${label}Hz</span>
+    </div>`;
+  }).join('');
+
+  EQ_BANDS.forEach((_, i) => {
+    const slider = $(`eq-${i}`);
+    const valLabel = $(`eq-val-${i}`);
+    const update = () => {
+      const val = +slider.value;
+      eqGains[i] = val;
+      valLabel.textContent = (val > 0 ? '+' : '') + val + 'dB';
+      if (eqFilters[i]) eqFilters[i].gain.value = val;
+      LS.set('eqGains', eqGains);
+    };
+    slider.addEventListener('input', update);
+    update();
+  });
+
+  document.querySelectorAll('.eq-preset-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const preset = EQ_PRESETS[btn.dataset.preset];
+      if (!preset) return;
+      eqGains = [...preset];
+      EQ_BANDS.forEach((_, i) => {
+        $(`eq-${i}`).value = eqGains[i];
+        $(`eq-val-${i}`).textContent = (eqGains[i] > 0 ? '+' : '') + eqGains[i] + 'dB';
+        if (eqFilters[i]) eqFilters[i].gain.value = eqGains[i];
+      });
+      LS.set('eqGains', eqGains);
+      document.querySelectorAll('.eq-preset-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+}
+
+// 均衡器按钮(侧边栏底部已有,绑定打开弹窗)
+const eqBtn = document.querySelector('#btn-equalizer');
+if (eqBtn) {
+  eqBtn.addEventListener('click', () => {
+    $('eq-modal').hidden = false;
+    if (!$('eq-sliders').innerHTML) initEQ();
+  });
+}
+$('eq-close').addEventListener('click', () => { $('eq-modal').hidden = true; });
 
 // ===== 初始化 =====
 function init() {

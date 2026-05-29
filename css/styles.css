@@ -366,6 +366,10 @@ body {
   font-size: 22px; color: var(--text-muted); overflow: hidden;
 }
 .now-cover img { width: 100%; height: 100%; object-fit: cover; }
+#visualizer {
+  width: 120px; height: 56px; border-radius: 6px;
+  background: rgba(0,0,0,0.3); flex-shrink: 0;
+}
 .now-meta { min-width: 0; }
 .now-title {
   font-size: 14px; font-weight: 600;
@@ -461,6 +465,36 @@ body {
 .modal .ghost-btn {
   width: auto; height: auto; border-radius: 999px; padding: 10px 20px; font-size: 14px;
 }
+
+/* ===== 均衡器 ===== */
+.eq-box { width: 520px; max-width: 90%; }
+.eq-presets {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px;
+}
+.eq-preset-btn {
+  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-sub); font-size: 12px;
+  cursor: pointer; transition: all 0.15s;
+}
+.eq-preset-btn:hover { border-color: var(--green); color: var(--text); }
+.eq-preset-btn.active { background: var(--green); color: #000; border-color: var(--green); }
+.eq-sliders {
+  display: flex; gap: 12px; justify-content: space-between; margin-bottom: 20px;
+}
+.eq-band {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.eq-slider {
+  -webkit-appearance: slider-vertical; writing-mode: bt-lr;
+  width: 6px; height: 120px; background: #4a4a4a; border-radius: 3px;
+  outline: none; cursor: pointer;
+}
+.eq-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--green); cursor: pointer;
+}
+.eq-label { font-size: 11px; color: var(--text-muted); }
+.eq-value { font-size: 10px; color: var(--text-sub); min-width: 32px; text-align: center; }
 
 #audio { display: none; }
 
