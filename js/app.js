@@ -57,6 +57,25 @@ const fmt = (s) => {
   return m + ':' + String(sec).padStart(2, '0');
 };
 const esc = (s) => { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; };
+// 复制文本到剪贴板,成功后给个轻提示
+function copyText(text) {
+  if (!text) return;
+  const ok = window.api.copyText(text);
+  toast(ok ? '已复制:' + text : '复制失败');
+}
+// 顶部轻提示(复用鼓励语 toast 的位置做个临时简易提示)
+function toast(msg) {
+  let el = document.getElementById('mini-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'mini-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 1800);
+}
 const byPath = (p) => library.find((x) => x.filePath === p);
 const saveLib = () => LS.set('library', library.map((s) => ({ ...s, cover: null })));
 
@@ -248,7 +267,52 @@ function renderOnlineRows(list, genreLabel, emptyHint) {
   }).join('');
   body.querySelectorAll('.st-row').forEach((row) => {
     row.addEventListener('click', () => playOnline(row.dataset.onlineId));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showOnlineResultMenu(e.clientX, e.clientY, row.dataset.onlineId);
+    });
   });
+}
+
+// 在线搜索结果的右键菜单(目前:下载到本地)
+function showOnlineResultMenu(x, y, songId) {
+  closeContextMenu();
+  const song = onlineResults.find((s) => s.id == songId);
+  if (!song) return;
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `<div class="ctx-item" data-action="dl">⬇ 下载到本地</div>
+    <div class="ctx-item" data-action="copy">📋 复制歌曲名</div>`;
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+  menu.querySelector('[data-action="dl"]').addEventListener('click', () => {
+    closeContextMenu();
+    downloadOnlineSong(song);
+  });
+  menu.querySelector('[data-action="copy"]').addEventListener('click', () => {
+    closeContextMenu();
+    copyText(song.name);
+  });
+}
+
+// 下载一首在线歌曲:先用 QQ 解析试听地址,再交主进程弹保存框写盘
+async function downloadOnlineSong(song) {
+  const artist = song.artists.map((a) => a.name).join(', ');
+  try {
+    const playUrl = await window.api.qqUrl(song.id);
+    if (!playUrl) { alert('该歌曲为付费/会员歌曲,无法下载'); return; }
+    const name = `${song.name} - ${artist}`;
+    const r = await window.api.downloadFile(playUrl, name);
+    if (!r) return; // 用户在保存对话框取消
+    if (r.ok) alert('已下载到:\n' + r.path);
+    else alert('下载失败:' + (r.error || '未知错误'));
+  } catch (e) {
+    console.error('下载失败:', e);
+    alert('下载失败,请重试');
+  }
 }
 
 // 渲染导入的在线歌单(网易云元数据,点击经 QQ 解析播放)
@@ -282,7 +346,93 @@ function renderOnlinePlaylistRows(opl) {
   }).join('');
   body.querySelectorAll('.st-row').forEach((row) => {
     row.addEventListener('click', () => playFromOnlinePlaylist(opl.id, +row.dataset.oplIdx));
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showOnlineSongMenu(e.clientX, e.clientY, opl.id, +row.dataset.oplIdx);
+    });
   });
+}
+
+// 在线歌单内单首歌的右键菜单(目前仅删除)
+function showOnlineSongMenu(x, y, plId, idx) {
+  closeContextMenu();
+  const opl = onlinePlaylists.find((p) => p.id === plId);
+  if (!opl || !opl.songs[idx]) return;
+  const song = opl.songs[idx];
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `
+    <div class="ctx-item" data-action="dl">⬇ 下载到本地</div>
+    <div class="ctx-item" data-action="copy">📋 复制歌曲名</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" data-action="del">🗑 从歌单删除</div>`;
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+  menu.querySelector('[data-action="dl"]').addEventListener('click', () => {
+    closeContextMenu();
+    downloadPlaylistSong(song);
+  });
+  menu.querySelector('[data-action="copy"]').addEventListener('click', () => {
+    closeContextMenu();
+    copyText(song.name);
+  });
+  menu.querySelector('[data-action="del"]').addEventListener('click', () => {
+    closeContextMenu();
+    if (!confirm(`确定从歌单删除「${song.name}」吗?`)) return;
+    deleteOnlineSong(plId, idx);
+  });
+}
+
+// 下载在线歌单里的一首歌:歌单只有网易云元数据,先用歌名+歌手经 QQ 解析出试听地址再下载
+async function downloadPlaylistSong(meta) {
+  try {
+    const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
+    const q = (meta.name + ' ' + realArtist).trim();
+    const results = await window.api.qqSearch(q, 1);
+    const song = results && results[0];
+    if (!song || !song.id) { alert('未找到可下载资源:' + meta.name); return; }
+    const playUrl = await window.api.qqUrl(song.id);
+    if (!playUrl) { alert('「' + meta.name + '」为付费/会员歌曲,无法下载'); return; }
+    const r = await window.api.downloadFile(playUrl, `${meta.name} - ${meta.artist}`);
+    if (!r) return; // 用户取消保存
+    if (r.ok) alert('已下载到:\n' + r.path);
+    else alert('下载失败:' + (r.error || '未知错误'));
+  } catch (e) {
+    console.error('下载失败:', e);
+    alert('下载失败,请重试');
+  }
+}
+
+// 从在线歌单删除一首歌:若删的是正在连播的当前歌则停掉,并修正播放索引
+function deleteOnlineSong(plId, idx) {
+  const opl = onlinePlaylists.find((p) => p.id === plId);
+  if (!opl || idx < 0 || idx >= opl.songs.length) return;
+  // 若正在连播这个歌单
+  if (onlinePlaylistMode && onlinePlayList === opl.songs) {
+    if (onlinePlayIdx === idx) {
+      // 删的就是当前播放的歌,停掉播放
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      currentPath = null;
+      onlinePlaylistMode = false;
+      onlinePlayList = null;
+      onlinePlayIdx = -1;
+      $('now-title').textContent = '未播放';
+      $('now-artist').textContent = '选择一首歌曲开始';
+      $('now-cover').classList.remove('rotating');
+    } else if (onlinePlayIdx > idx) {
+      // 删的歌在当前之前,索引前移一位
+      onlinePlayIdx--;
+    }
+  }
+  opl.songs.splice(idx, 1);
+  LS.set('onlinePlaylists', onlinePlaylists);
+  renderPlaylists();
+  render();
 }
 
 // ===== 排序 =====
@@ -330,6 +480,14 @@ function removeFromPlaylist(path, plId) {
   if (!pl) return;
   pl.songs = pl.songs.filter((p) => p !== path);
   LS.set('playlists', playlists);
+  renderPlaylists();
+  render();
+}
+
+// 从「最近播放」列表移除(不动音乐库本身)
+function removeFromRecent(path) {
+  recent = recent.filter((p) => p !== path);
+  LS.set('recent', recent);
   renderPlaylists();
   render();
 }
@@ -500,7 +658,9 @@ function showContextMenu(x, y, path) {
   items.push({ label: '＋ 加入歌单…', sub: playlists.length ? playlists.map((p) => ({
     label: p.name, fn: () => addToPlaylist(path, p.id)
   })) : [{ label: '(暂无歌单,先新建)', disabled: true }] });
+  items.push({ label: '📋 复制歌曲名', fn: () => copyText(s.title) });
   if (inPl) items.push({ label: '✕ 从此歌单移除', fn: () => removeFromPlaylist(path, inPl) });
+  if (view === 'recent') items.push({ label: '✕ 从最近播放移除', fn: () => removeFromRecent(path) });
   items.push({ label: '🔄 补全歌曲信息', fn: () => completeSongInfo(path) });
   items.push({ sep: true });
   if (multi) {
@@ -556,27 +716,35 @@ function drawVisualizer() {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
 
+  const barCount = 16;
+  const barWidth = w / barCount;
+
   function draw() {
     requestAnimationFrame(draw);
-    if (!analyser || !dataArray) return;
-    analyser.getByteFrequencyData(dataArray);
-
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.fillRect(0, 0, w, h);
 
-    const barCount = 16;
-    const barWidth = w / barCount;
-    const step = Math.floor(dataArray.length / barCount);
+    const playing = currentPath && !audio.paused;
+    const hasReal = analyser && dataArray;
+    if (hasReal) analyser.getByteFrequencyData(dataArray);
+    const step = hasReal ? Math.floor(dataArray.length / barCount) : 0;
+    // 在线播放无法接 Web Audio(跨域会静音),用播放时间驱动伪频谱,让音符也跳动
+    const t = audio.currentTime || 0;
 
     for (let i = 0; i < barCount; i++) {
-      const val = dataArray[i * step] / 255;
-      const barHeight = val * h * 0.9;
+      let val;
+      if (hasReal) {
+        val = dataArray[i * step] / 255;               // 本地:真实频谱
+      } else if (playing) {
+        // 在线:多个正弦叠加做出高低起伏的假跳动(0~1)
+        val = (Math.sin(t * 6 + i * 0.7) + Math.sin(t * 11 + i * 1.9) + 2) / 4 * (0.5 + 0.5 * Math.abs(Math.sin(t * 3 + i)));
+      } else {
+        val = 0;                                        // 暂停/未播放:静止
+      }
+      const barHeight = Math.max(val * h * 0.9, playing ? 2 : 1);
       const x = i * barWidth;
       const y = h - barHeight;
-
-      // 绿色渐变
-      const green = audio.paused ? '#3a3a3a' : `rgba(29, 185, 84, ${0.6 + val * 0.4})`;
-      ctx.fillStyle = green;
+      ctx.fillStyle = playing ? `rgba(29, 185, 84, ${0.6 + val * 0.4})` : '#3a3a3a';
       ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
     }
   }
@@ -858,6 +1026,48 @@ async function loadLyrics(path) {
   }
   lrc = data;
   box.innerHTML = data.map((l, i) => `<p data-i="${i}">${esc(l.text)}</p>`).join('');
+  maybeTranslateLyrics(path, data);
+}
+
+// 英文歌词翻译:若多数行含英文字母且基本无中文,则整体翻译,把译文塞到每行原文下方
+// 译文会按歌曲缓存到本地(gt_trans_<key>),下次同一首歌直接读缓存,不再请求翻译接口
+async function maybeTranslateLyrics(path, data) {
+  try {
+    const texts = data.map((l) => l.text);
+    // 判断是不是英文歌词:含中文的行占比很低,且大部分行有英文字母
+    const hasCJK = (s) => /[一-鿿]/.test(s);
+    const hasLatin = (s) => /[a-zA-Z]/.test(s);
+    const cjkLines = texts.filter(hasCJK).length;
+    const latinLines = texts.filter(hasLatin).length;
+    if (latinLines < 3 || cjkLines > texts.length * 0.3) return; // 不像英文歌词,跳过
+
+    const cacheKey = 'trans_' + path;
+    let trans = LS.get(cacheKey, null);            // 先读本地缓存
+    if (!trans || trans.length !== texts.length) {
+      trans = await window.api.translateLines(texts);
+      if (path !== currentPath) return; // 切歌了
+      if (!trans || trans.length !== texts.length) return;
+      LS.set(cacheKey, trans);                      // 翻译成功后存本地
+    }
+    if (path !== currentPath) return; // 读缓存期间可能已切歌
+
+    const box = $('lp-lyrics');
+    data.forEach((l, i) => {
+      const t = (trans[i] || '').trim();
+      // 译文和原文不同、且原文确实是英文时才显示
+      if (t && t !== l.text && hasLatin(l.text)) {
+        const p = box.querySelector(`p[data-i="${i}"]`);
+        if (p && !p.querySelector('.lp-trans')) {
+          const span = document.createElement('span');
+          span.className = 'lp-trans';
+          span.textContent = t;
+          p.appendChild(span);
+        }
+      }
+    });
+  } catch (e) {
+    console.error('歌词翻译失败:', e);
+  }
 }
 
 // 在线歌词搜索(QQ 音乐 API,无需 key)
@@ -1385,55 +1595,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ===== 拖拽导入 =====
-document.body.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-document.body.addEventListener('drop', async (e) => {
-  e.preventDefault();
-  const files = Array.from(e.dataTransfer.files);
-  if (!files.length) return;
-  const paths = files.map((f) => window.api.pathForFile(f)).filter(Boolean);
-  if (!paths.length) return;
-  const songs = await window.api.readMeta(paths);
-  if (songs && songs.length) importSongs(songs);
-});
-
-// ===== 表头排序绑定 =====
-document.querySelectorAll('.st-head .st-col[data-sort]').forEach((col) => {
-  col.addEventListener('click', () => setSort(col.dataset.sort));
-});
-
-// ===== 频谱可视化 =====
-function drawVisualizer() {
-  const canvas = $('visualizer');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-
-  function draw() {
-    requestAnimationFrame(draw);
-    if (!analyser || !dataArray) return;
-    analyser.getByteFrequencyData(dataArray);
-
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.fillRect(0, 0, W, H);
-
-    const barCount = 20;
-    const barWidth = W / barCount;
-    const step = Math.floor(dataArray.length / barCount);
-
-    for (let i = 0; i < barCount; i++) {
-      const val = dataArray[i * step] || 0;
-      const barHeight = (val / 255) * H * 0.9;
-      const x = i * barWidth;
-      const y = H - barHeight;
-      const hue = 140; // 绿色
-      ctx.fillStyle = audio.paused ? '#3a3a3a' : `hsl(${hue}, 70%, ${45 + val / 255 * 20}%)`;
-      ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
-    }
-  }
-  draw();
-}
-
 // ===== 均衡器 =====
 function initEQ() {
   const container = $('eq-sliders');
@@ -1482,7 +1643,8 @@ const eqBtn = $('eq-btn');
 if (eqBtn) {
   eqBtn.addEventListener('click', () => {
     $('eq-modal').hidden = false;
-    if (!$('eq-sliders').innerHTML) initEQ();
+    // 用是否已生成滑块来判断,避免容器里的 HTML 注释让 innerHTML 永远非空导致 initEQ 不执行
+    if (!$('eq-0')) initEQ();
   });
 }
 $('eq-close').addEventListener('click', () => { $('eq-modal').hidden = true; });
@@ -1585,6 +1747,7 @@ async function loadOnlineLyrics(songId) {
     lrc = parseLrc(raw);
     if (!lrc.length) { box.innerHTML = '<p class="lp-placeholder">暂无歌词</p>'; return; }
     box.innerHTML = lrc.map((l, i) => `<p data-i="${i}">${esc(l.text)}</p>`).join('');
+    maybeTranslateLyrics(String(songId), lrc);
   } catch (e) {
     box.innerHTML = '<p class="lp-placeholder">歌词加载失败</p>';
   }

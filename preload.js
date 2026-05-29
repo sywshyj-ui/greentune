@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, clipboard } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   minimize: () => ipcRenderer.send('win-minimize'),
@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('api', {
   qqLyric: (songmid) => ipcRenderer.invoke('qq-lyric', songmid),
   // 网易云音乐:拉取歌单详情
   neteasePlaylist: (id) => ipcRenderer.invoke('netease-playlist', id),
+  // 下载在线音频到本地(弹保存对话框)
+  downloadFile: (url, suggestedName) => ipcRenderer.invoke('download-file', url, suggestedName),
+  // 英文歌词翻译成中文(传入字符串数组,返回等长译文数组)
+  translateLines: (lines) => ipcRenderer.invoke('translate-lines', lines),
+  // 复制文本到系统剪贴板(file:// 下 navigator.clipboard 不可用,用 Electron 原生)
+  copyText: (text) => { try { clipboard.writeText(String(text ?? '')); return true; } catch { return false; } },
   // 取拖拽 File 对象的真实磁盘路径(Electron 推荐方式)
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return file.path || ''; } }
 });

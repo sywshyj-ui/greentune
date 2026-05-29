@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const iconv = require('iconv-lite');
 const jsmediatags = require('jsmediatags');
+const https = require('https');
+const http = require('http');
 
 let mainWindow;
 let tray = null;
@@ -18,6 +20,7 @@ function createWindow() {
     frame: false,
     backgroundColor: '#121212',
     title: '浩哥的Music',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -37,8 +40,8 @@ function createWindow() {
 
 // 创建系统托盘图标
 function createTray() {
-  // 使用 logo.jpg 作为托盘图标,缩放到 16x16
-  const iconPath = path.join(__dirname, 'assets', 'logo.jpg');
+  // 用绿色音符图标作为托盘图标,缩放到 16x16
+  const iconPath = path.join(__dirname, 'assets', 'icon.png');
   let icon;
   try {
     icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
@@ -195,34 +198,129 @@ ipcMain.handle('qq-lyric', async (_e, songmid) => {
 });
 
 // ---- 网易云音乐:获取歌单详情 ----
-// 带 music.163.com 的 Referer 直接读取公开歌单。优先用旧版 detail(一次返回完整 tracks),
-// 失败再退回 v6。只取列表信息(歌名/歌手/封面/时长),实际播放交给 QQ 音乐解析。
+// 带 music.163.com 的 Referer 直接读取公开歌单。
+// 注意:playlist/detail 的 tracks 只返回前若干首,完整歌曲 ID 在 trackIds 里。
+// 因此先取歌单名和全部 trackIds,再用 song/detail 分批(每批100)补全所有歌曲。
 ipcMain.handle('netease-playlist', async (_e, id) => {
+  // 把一首 track 归一化成我们用的字段(兼容新旧接口 artists/ar、album/al、duration/dt)
+  const mapTrack = (t) => ({
+    neid: t.id,
+    name: t.name || '未知歌曲',
+    artist: ((t.artists || t.ar || []).map((a) => a.name).join(', ')) || 'Unknown Artist',
+    album: ((t.album && t.album.name) || (t.al && t.al.name)) || 'Unknown Album',
+    picUrl: (t.album && t.album.picUrl) || (t.al && t.al.picUrl) || '',
+    duration: t.duration || t.dt || 0
+  });
+
   const tryUrls = [
-    `https://music.163.com/api/playlist/detail?id=${id}`,
-    `https://music.163.com/api/v6/playlist/detail?id=${id}&n=1000`
+    `https://music.163.com/api/v6/playlist/detail?id=${id}&n=100000`,
+    `https://music.163.com/api/playlist/detail?id=${id}`
   ];
   for (const url of tryUrls) {
     try {
       const r = await httpGetRaw(url, 'https://music.163.com');
-      const pl = r && (r.result || r.playlist);
-      const tracks = pl && pl.tracks;
-      if (!pl || !Array.isArray(tracks) || !tracks.length) continue;
-      const songs = tracks.map((t) => ({
-        neid: t.id,
-        // 旧接口字段为 artists/album/duration,新接口为 ar/al/dt,两者都兼容
-        name: t.name || '未知歌曲',
-        artist: ((t.artists || t.ar || []).map((a) => a.name).join(', ')) || 'Unknown Artist',
-        album: ((t.album && t.album.name) || (t.al && t.al.name)) || 'Unknown Album',
-        picUrl: (t.album && t.album.picUrl) || (t.al && t.al.picUrl) || '',
-        duration: t.duration || t.dt || 0
-      }));
+      const pl = r && (r.playlist || r.result);
+      if (!pl) continue;
+      const tracks = Array.isArray(pl.tracks) ? pl.tracks : [];
+      // 全部歌曲 ID:优先 trackIds(完整),否则退回 tracks 自身
+      const allIds = Array.isArray(pl.trackIds) && pl.trackIds.length
+        ? pl.trackIds.map((x) => x.id)
+        : tracks.map((t) => t.id);
+      if (!allIds.length) continue;
+
+      // 已在 tracks 里拿到详情的歌,先存下来;缺的再补
+      const byId = {};
+      tracks.forEach((t) => { byId[t.id] = mapTrack(t); });
+      const missing = allIds.filter((tid) => !byId[tid]);
+
+      // 分批补全缺失的歌曲详情(每批 100 个 id),用 v3/song/detail 的 c 参数
+      for (let i = 0; i < missing.length; i += 100) {
+        const batch = missing.slice(i, i + 100);
+        const cParam = encodeURIComponent(JSON.stringify(batch.map((tid) => ({ id: tid }))));
+        const detailUrl = `https://music.163.com/api/v3/song/detail?c=${cParam}`;
+        try {
+          const dr = await httpGetRaw(detailUrl, 'https://music.163.com');
+          const songsArr = (dr && (dr.songs || (dr.result && dr.result.songs))) || [];
+          songsArr.forEach((t) => { byId[t.id] = mapTrack(t); });
+        } catch (e) { /* 这批失败就跳过,尽量保留已拿到的 */ }
+      }
+
+      // 按 trackIds 原顺序输出
+      const songs = allIds.map((tid) => byId[tid]).filter(Boolean);
+      if (!songs.length) continue;
       return { name: pl.name || '网易云歌单', count: songs.length, songs };
     } catch (e) {
       // 试下一个接口
     }
   }
   return null;
+});
+
+// ---- 下载在线音频到本地 ----
+// 渲染层先用 qq-url 解析出试听地址,再调用本接口。弹保存对话框让用户选位置,
+// 然后用 Node 原生 https/http 把音频流写到磁盘。返回 {ok,path} 或 {ok:false,error};取消返回 null。
+ipcMain.handle('download-file', async (_e, url, suggestedName) => {
+  if (!url) return null;
+  // 从 URL 推断扩展名,缺省 m4a(QQ 试听多为 m4a)
+  const extMatch = url.split('?')[0].match(/\.(mp3|m4a|flac|ogg|wav|aac)$/i);
+  const ext = extMatch ? extMatch[1].toLowerCase() : 'm4a';
+  // 清掉文件名里的非法字符
+  const safeName = (suggestedName || 'download').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+  const r = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `${safeName}.${ext}`,
+    filters: [{ name: 'Audio', extensions: [ext] }]
+  });
+  if (r.canceled || !r.filePath) return null;
+  const dest = r.filePath;
+  // 用 Node 原生 https/http 下载,绕开 Electron net 被拦截(ERR_BLOCKED_BY_CLIENT)的问题
+  return new Promise((resolve) => {
+    const doGet = (u, redirects) => {
+      if (redirects > 5) { resolve({ ok: false, error: '重定向次数过多' }); return; }
+      const mod = u.startsWith('http://') ? http : https;
+      const req = mod.get(u, { headers: { 'Referer': 'https://y.qq.com', 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+        // 处理重定向
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume(); // 丢弃响应体
+          doGet(new URL(res.headers.location, u).toString(), redirects + 1);
+          return;
+        }
+        if (res.statusCode !== 200) { res.resume(); resolve({ ok: false, error: 'HTTP ' + res.statusCode }); return; }
+        const out = fs.createWriteStream(dest);
+        res.pipe(out);
+        out.on('finish', () => out.close(() => resolve({ ok: true, path: dest })));
+        out.on('error', (err) => { try { fs.unlinkSync(dest); } catch {} resolve({ ok: false, error: String(err) }); });
+        res.on('error', (err) => { out.close(); try { fs.unlinkSync(dest); } catch {} resolve({ ok: false, error: String(err) }); });
+      });
+      req.on('error', (err) => resolve({ ok: false, error: String(err) }));
+      req.end();
+    };
+    doGet(url, 0);
+  });
+});
+
+// ---- 翻译(英文歌词 -> 中文) ----
+// 用有道公开 demo 接口(无需 key,国内可访问)。多行用 \n 拼成一次请求,译文也按 \n 切回各行。
+// 返回与输入等长的译文数组;失败返回 null。
+ipcMain.handle('translate-lines', async (_e, lines) => {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  const joined = lines.join('\n');
+  const url = 'https://aidemo.youdao.com/trans?from=en&to=zh-CHS&q=' + encodeURIComponent(joined);
+  return new Promise((resolve) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (data.errorCode !== '0' && data.errorCode !== 0) { resolve(null); return; }
+          // translation[0] 是整段译文(保留了 \n),切回各行
+          const translated = (data.translation && data.translation[0]) || '';
+          resolve(translated.split('\n'));
+        } catch (e) { resolve(null); }
+      });
+    }).on('error', () => resolve(null));
+  });
 });
 
 function scanDir(dir) {

@@ -342,6 +342,12 @@ body {
 .lp-lyrics p.active {
   color: var(--green); transform: scale(1.08); font-size: 17px;
 }
+/* 英文歌词下方的中文译文 */
+.lp-trans {
+  display: block; font-size: 12px; font-weight: 500;
+  color: var(--text-muted); opacity: 0.75; margin-top: 2px;
+}
+.lp-lyrics p.active .lp-trans { color: var(--green); opacity: 0.9; }
 .lp-placeholder { color: var(--text-muted); }
 
 /* ===== 播放条 ===== */
@@ -657,3 +663,14 @@ body {
   background: var(--bg-elevated); padding: 24px 40px; border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
+
+/* 轻提示(复制成功等),底部居中淡入淡出 */
+#mini-toast {
+  position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%) translateY(10px);
+  background: var(--green); color: #06210f; font-size: 13px; font-weight: 700;
+  padding: 9px 18px; border-radius: 20px; z-index: 3000;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4); pointer-events: none;
+  opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease;
+  max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
