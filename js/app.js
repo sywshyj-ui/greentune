@@ -479,10 +479,17 @@ function showContextMenu(x, y, path) {
   menu.id = 'ctx-menu';
 
   const items = [];
-  // 当前选中的行(支持多选批量删除)
-  const selPaths = Array.from(document.querySelectorAll('.st-row.selected'))
-    .map((r) => r.dataset.path).filter(Boolean);
-  const multi = selPaths.length > 1 && selPaths.includes(path);
+  // 右键行为:若右键的行未在已选中集合里,则把它单独选中(符合文件管理器直觉);
+  // 若右键的是已选中的行(且有多选),则对全部选中项批量操作。
+  let selRows = Array.from(document.querySelectorAll('.st-row.selected'));
+  let selPaths = selRows.map((r) => r.dataset.path).filter(Boolean);
+  if (!selPaths.includes(path)) {
+    document.querySelectorAll('.st-row').forEach((r) => r.classList.remove('selected'));
+    const thisRow = document.querySelector(`.st-row[data-path="${CSS.escape(path)}"]`);
+    if (thisRow) thisRow.classList.add('selected');
+    selPaths = [path];
+  }
+  const multi = selPaths.length > 1;
 
   items.push({ label: '▶ 播放', fn: () => playPath(path) });
   items.push({ label: liked ? '♥ 取消喜欢' : '♡ 添加到喜欢', fn: () => toggleFav(path) });
