@@ -529,21 +529,10 @@ body {
   cursor: move; /* 鼠标变成移动图标 */
   user-select: none;
   transition: opacity 0.4s ease;
-  background: rgba(0,0,0,0.3); /* 半透明背景便于看清边界 */
-  border-radius: 12px;
-  border: 2px solid transparent;
+  /* 只留文字:去掉背景框/圆角/边框 */
+  background: transparent;
 }
 #cheer-toast.show { opacity: 1; pointer-events: auto; } /* 显示时才可交互/拖动 */
-#cheer-toast:hover { border-color: var(--green); }
-/* 右下角调整大小手柄 */
-#cheer-toast::after {
-  content: '⋰';
-  position: absolute; right: 4px; bottom: 4px;
-  font-size: 20px; color: var(--text-muted);
-  cursor: nwse-resize;
-  opacity: 0.5;
-}
-#cheer-toast:hover::after { opacity: 1; }
 
 /* ===== 重复歌曲弹窗 ===== */
 .dup-box { width: 560px; max-width: 92%; }
