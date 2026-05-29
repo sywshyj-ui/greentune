@@ -106,10 +106,12 @@ ipcMain.handle('http-get', async (_e, url) => {
       // 网易云接口需要带 Referer,否则返回错误
       headers: { 'Referer': 'https://music.163.com', 'User-Agent': 'Mozilla/5.0' }
     });
-    let body = '';
+    const chunks = [];
     request.on('response', (response) => {
-      response.on('data', (chunk) => { body += chunk.toString(); });
+      response.on('data', (chunk) => { chunks.push(chunk); });
       response.on('end', () => {
+        // 合并后整体解码,避免多字节中文被切在块边界导致乱码
+        const body = Buffer.concat(chunks).toString('utf8');
         try { resolve(JSON.parse(body)); }
         catch { resolve(body); }
       });
@@ -126,10 +128,12 @@ function httpGetRaw(url, referer) {
       url,
       headers: { 'Referer': referer || '', 'User-Agent': 'Mozilla/5.0' }
     });
-    let body = '';
+    const chunks = [];
     request.on('response', (response) => {
-      response.on('data', (chunk) => { body += chunk.toString(); });
+      response.on('data', (chunk) => { chunks.push(chunk); });
       response.on('end', () => {
+        // 合并后整体解码,避免多字节中文被切在块边界导致乱码
+        const body = Buffer.concat(chunks).toString('utf8');
         try { resolve(JSON.parse(body)); } catch { resolve(body); }
       });
     });
