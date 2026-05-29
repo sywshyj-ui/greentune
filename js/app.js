@@ -255,6 +255,16 @@ function removeFromPlaylist(path, plId) {
 }
 
 function deleteSong(path) {
+  // 若删除的是正在播放的歌,先停止播放并清空播放信息,避免 currentPath 变野指针
+  if (path === currentPath) {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    currentPath = null;
+    $('now-title').textContent = '未播放';
+    $('now-artist').textContent = '选择一首歌曲开始';
+    $('now-cover').classList.remove('rotating');
+  }
   library = library.filter((s) => s.filePath !== path);
   favorites = favorites.filter((p) => p !== path);
   recent = recent.filter((p) => p !== path);
@@ -267,6 +277,61 @@ function deleteSong(path) {
   renderPlaylists();
   render();
 }
+
+// ===== 重复歌曲查找 =====
+// 归一化:去空格、转小写,用于判断标题+歌手是否相同
+function dupKey(s) {
+  const norm = (x) => (x || '').toString().trim().toLowerCase().replace(/\s+/g, '');
+  return norm(s.title) + '|' + norm(s.artist);
+}
+
+function findDuplicates() {
+  const groups = {};
+  for (const s of library) {
+    const k = dupKey(s);
+    (groups[k] = groups[k] || []).push(s);
+  }
+  // 只保留有 2 首及以上的分组
+  return Object.values(groups).filter((g) => g.length > 1);
+}
+
+function renderDupList() {
+  const dups = findDuplicates();
+  const box = $('dup-list');
+  if (!dups.length) {
+    box.innerHTML = '<div class="dup-empty">🎉 没有发现重复歌曲</div>';
+    return;
+  }
+  box.innerHTML = dups.map((g) => {
+    const s0 = g[0];
+    const head = `${esc(s0.title)} — ${esc(s0.artist)} (${g.length} 首)`;
+    const songs = g.map((s) => `
+      <div class="dup-song" data-path="${esc(s.filePath)}">
+        <span class="dup-name">${esc(s.title)}</span>
+        <span class="dup-path">${esc(s.filePath)}</span>
+        <button class="dup-del" data-del="${esc(s.filePath)}">删除</button>
+      </div>`).join('');
+    return `<div class="dup-group"><div class="dup-group-title">${head}</div>${songs}</div>`;
+  }).join('');
+
+  box.querySelectorAll('.dup-del').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const path = btn.dataset.del;
+      if (!confirm('确定从音乐库删除这首歌吗?(不会删除磁盘文件)')) return;
+      deleteSong(path);
+      renderDupList(); // 删完刷新弹窗
+    });
+  });
+}
+
+const findDupBtn = $('find-dup');
+if (findDupBtn) {
+  findDupBtn.addEventListener('click', () => {
+    $('dup-modal').hidden = false;
+    renderDupList();
+  });
+}
+$('dup-close').addEventListener('click', () => { $('dup-modal').hidden = true; });
 
 // 补全歌曲信息
 async function completeSongInfo(path) {
@@ -460,21 +525,15 @@ function showPlaylistMenu(x, y, plId) {
 }
 
 // ===== 播放引擎 =====
-function playPath(path) {
-  const s = byPath(path);
-  if (!s) return;
-  currentPath = path;
-  audio.src = 'file://' + path.replace(/\\/g, '/').replace(/#/g, '%23');
-  audio.play().catch((e) => console.error('play error', e));
-
-  // Web Audio 频谱初始化(首次播放时)
+// 初始化 Web Audio 图(频谱 + 10 段均衡器),只建一次,所有播放共用
+function ensureAudioGraph() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 64; // 32 个频段
     source = audioCtx.createMediaElementSource(audio);
 
-    // 均衡器滤波器链
+    // 均衡器滤波器链:source → f0 → f1 … → analyser → destination
     let prev = source;
     for (let i = 0; i < EQ_BANDS.length; i++) {
       const filter = audioCtx.createBiquadFilter();
@@ -492,6 +551,18 @@ function playPath(path) {
     dataArray = new Uint8Array(analyser.frequencyBinCount);
     drawVisualizer();
   }
+  // 浏览器自动播放策略会挂起 AudioContext,导致均衡器/频谱失效,这里恢复
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playPath(path) {
+  const s = byPath(path);
+  if (!s) return;
+  currentPath = path;
+  audio.src = 'file://' + path.replace(/\\/g, '/').replace(/#/g, '%23');
+  audio.play().catch((e) => console.error('play error', e));
+
+  ensureAudioGraph();
 
   // 现在播放信息
   $('now-title').textContent = s.title;
@@ -563,12 +634,13 @@ async function loadLyrics(path) {
   let data = await window.api.loadLrc(path);
   if (path !== currentPath) return;
 
-  // 本地没有,尝试在线搜索
+  // 本地没有,尝试在线搜索(只要有标题就搜,歌手可缺省)
   if (!data || !data.length) {
     const s = byPath(path);
-    if (s && s.title && s.artist) {
+    const realArtist = s && s.artist && s.artist !== 'Unknown Artist' ? s.artist : '';
+    if (s && s.title) {
       box.innerHTML = '<p class="lp-placeholder">本地无歌词,正在联网搜索…</p>';
-      data = await searchOnlineLyrics(s.title, s.artist);
+      data = await searchOnlineLyrics(s.title, realArtist);
       if (path !== currentPath) return;
     }
   }
@@ -581,15 +653,19 @@ async function loadLyrics(path) {
   box.innerHTML = data.map((l, i) => `<p data-i="${i}">${esc(l.text)}</p>`).join('');
 }
 
-// 在线歌词搜索(网易云 API,无需 key)
+// 在线歌词搜索(QQ 音乐 API,无需 key)
 async function searchOnlineLyrics(title, artist) {
-  const cacheKey = `lrc_${title}_${artist}`;
-  const cached = LS.get(cacheKey, null);
-  if (cached) return cached;
+  // 仅在有歌手时才用缓存:否则两首同名无歌手的歌会共用缓存键而串词
+  const cacheKey = artist ? `lrc_${title}_${artist}` : null;
+  if (cacheKey) {
+    const cached = LS.get(cacheKey, null);
+    if (cached) return cached;
+  }
 
   try {
-    // 通过 QQ 音乐搜索歌曲
-    const results = await window.api.qqSearch(title + ' ' + artist, 1);
+    // 通过 QQ 音乐搜索歌曲(歌手可为空)
+    const query = (title + ' ' + (artist || '')).trim();
+    const results = await window.api.qqSearch(query, 1);
     const song = results && results[0];
     if (!song || !song.id) return null;
 
@@ -600,7 +676,7 @@ async function searchOnlineLyrics(title, artist) {
     // 解析 LRC
     const lines = parseLRC(raw);
     if (lines.length) {
-      LS.set(cacheKey, lines); // 缓存
+      if (cacheKey) LS.set(cacheKey, lines); // 仅有歌手时缓存
       return lines;
     }
   } catch (e) {
@@ -821,6 +897,25 @@ $('like-btn').addEventListener('click', () => {
   toggleFav(currentPath);
 });
 
+// ===== 点击头像显示鼓励性话语 =====
+const CHEER_WORDS = [
+  '你超棒的!', '今天也要加油哦', '相信自己,你可以的', '保持热爱,奔赴山海',
+  '慢慢来,比较快', '你已经很努力了', '世界因你而美好', '继续闪闪发光吧',
+  '一切都会好起来的', '你值得所有美好', '勇敢的人先享受世界', '愿你被生活温柔以待'
+];
+let cheerTimer = null;
+$('now-cover').addEventListener('click', () => {
+  const toast = $('cheer-toast');
+  const word = CHEER_WORDS[Math.floor(Math.random() * CHEER_WORDS.length)];
+  toast.textContent = word;
+  // 重新触发动画
+  toast.classList.remove('show');
+  void toast.offsetWidth;
+  toast.classList.add('show');
+  clearTimeout(cheerTimer);
+  cheerTimer = setTimeout(() => toast.classList.remove('show'), 10000); // 10 秒后消失
+});
+
 // 静音
 let preMuteVol = volume;
 $('vol-btn').addEventListener('click', () => {
@@ -938,6 +1033,12 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp' && !typing) { e.preventDefault(); volume = Math.min(1, (audio.volume||0) + 0.05); audio.volume = volume; volBar.apply(volume); LS.set('volume', volume); }
   else if (e.key === 'ArrowDown' && !typing) { e.preventDefault(); volume = Math.max(0, (audio.volume||0) - 0.05); audio.volume = volume; volBar.apply(volume); LS.set('volume', volume); }
   else if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); view = 'search'; render(); $('search-input').focus(); }
+  else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A') && !typing) {
+    // Ctrl+A 全选当前列表所有歌曲(在线视图不适用)
+    if (view === 'online' || view === 'recommend') return;
+    e.preventDefault();
+    document.querySelectorAll('.st-row').forEach((r) => r.classList.add('selected'));
+  }
 });
 
 // ===== 拖拽导入 =====
@@ -1067,6 +1168,9 @@ async function playOnline(songId) {
     currentPath = String(songId);
     audio.src = playUrl;
     audio.play().catch((e) => console.error('播放失败', e));
+    // 注意:不对在线流接入 Web Audio 图。QQ 音频是跨域资源,且 audio 未设
+    // crossOrigin,经 createMediaElementSource 会被判为 tainted 而输出静音。
+    // 因此在线试听跳过均衡器/频谱(本地播放不受影响)。
     $('now-title').textContent = song.name;
     $('now-artist').textContent = song.artists.map((a) => a.name).join(', ');
     const coverEl = $('now-cover');
@@ -1152,6 +1256,39 @@ async function loadRecommendations() {
   }
 }
 
+// ===== 修复旧数据乱码 =====
+// 之前导入时缓存进 localStorage 的标题可能是乱码(GBK 被误读),
+// 这些数据不会经过主进程的 fixGBK。启动时检测并重新读取元数据修复。
+function hasMojibake(str) {
+  if (!str) return false;
+  // 含有高位 Latin-1 字符且没有正常中文/常规 ASCII 单词,疑似乱码
+  return /[-ÿ]/.test(str) && !/[一-鿿]/.test(str);
+}
+
+async function repairGarbledTitles() {
+  const bad = library.filter((s) => hasMojibake(s.title) || hasMojibake(s.artist) || hasMojibake(s.album));
+  if (!bad.length) return;
+  try {
+    const fresh = await window.api.readMeta(bad.map((s) => s.filePath));
+    if (!fresh || !fresh.length) return;
+    const map = {};
+    fresh.forEach((f) => { map[f.filePath] = f; });
+    let changed = false;
+    library.forEach((s) => {
+      const f = map[s.filePath];
+      if (f) {
+        s.title = f.title; s.artist = f.artist; s.album = f.album;
+        s.genre = f.genre; s.year = f.year;
+        if (f.cover) coverCache[s.filePath] = f.cover;
+        changed = true;
+      }
+    });
+    if (changed) { saveLib(); render(); }
+  } catch (e) {
+    console.error('乱码修复失败:', e);
+  }
+}
+
 // ===== 初始化 =====
 function init() {
   applyTheme();
@@ -1160,5 +1297,6 @@ function init() {
   applyModeUI();
   renderPlaylists();
   render();
+  repairGarbledTitles(); // 自动修复旧的乱码标题
 }
 init();

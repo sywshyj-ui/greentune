@@ -489,18 +489,64 @@ body {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
 }
 .eq-slider {
-  -webkit-appearance: slider-vertical; writing-mode: bt-lr;
+  -webkit-appearance: none; appearance: none;
+  writing-mode: vertical-lr; direction: rtl; /* 竖向滑块,上=增益 (新版 Chromium 写法) */
   width: 6px; height: 120px; background: #4a4a4a; border-radius: 3px;
   outline: none; cursor: pointer;
 }
 .eq-slider::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
   background: var(--green); cursor: pointer;
+  box-shadow: 0 0 4px rgba(29,185,84,0.6);
+}
+.eq-slider::-webkit-slider-runnable-track {
+  width: 6px; background: #4a4a4a; border-radius: 3px;
 }
 .eq-label { font-size: 11px; color: var(--text-muted); }
 .eq-value { font-size: 10px; color: var(--text-sub); min-width: 32px; text-align: center; }
 
 #audio { display: none; }
+
+/* ===== 头像可点击 + 鼓励语 ===== */
+.now-cover { cursor: pointer; }
+/* 鼓励性话语:居中显示在主内容空白区,字号是最大字号(28px)的 2 倍 = 56px */
+#cheer-toast {
+  position: fixed; left: 50%; top: 42%;
+  transform: translate(-50%, -50%) scale(0.8);
+  z-index: 4000; pointer-events: none;
+  max-width: 80vw; text-align: center;
+  font-size: 56px; font-weight: 800; line-height: 1.25;
+  color: var(--green);
+  text-shadow: 0 4px 24px rgba(0,0,0,0.7), 0 0 30px rgba(29,185,84,0.4);
+  opacity: 0;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+#cheer-toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+/* ===== 重复歌曲弹窗 ===== */
+.dup-box { width: 560px; max-width: 92%; }
+.dup-list { max-height: 50vh; overflow-y: auto; margin: 8px 0 4px; }
+.dup-group {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px;
+}
+.dup-group-title { font-size: 13px; font-weight: 700; color: var(--green); margin-bottom: 8px; }
+.dup-song {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: 6px; font-size: 13px;
+}
+.dup-song:hover { background: var(--bg-hover); }
+.dup-song .dup-path { flex: 1; color: var(--text-sub); font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dup-song .dup-name { color: var(--text); font-weight: 600; flex-shrink: 0; max-width: 180px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dup-del {
+  border: none; background: rgba(240,97,109,0.15); color: #f0616d;
+  border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0;
+}
+.dup-del:hover { background: rgba(240,97,109,0.3); }
+.dup-empty { text-align: center; color: var(--text-muted); padding: 30px 0; font-size: 14px; }
 
 /* ===== 右键上下文菜单 ===== */
 .ctx-menu {
