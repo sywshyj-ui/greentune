@@ -266,6 +266,11 @@ body {
 .st-row.playing { background: var(--green-dim); }
 .st-row.playing .row-title { color: var(--green); }
 
+@keyframes highlight-flash {
+  0%, 100% { background: var(--bg-hover); }
+  50% { background: var(--green-dim); }
+}
+
 .row-idx { text-align: center; color: var(--text-muted); font-size: 14px; }
 .st-row:hover .row-idx .num { display: none; }
 .row-idx .play-mark { display: none; color: var(--text); }
@@ -321,29 +326,21 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 15px; font-weight: 700; margin-bottom: 16px;
 }
-.lp-cover {
-  width: 100%; aspect-ratio: 1; border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, #2a2a2a, #151515);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 64px; color: var(--text-muted);
-  overflow: hidden; margin-bottom: 16px; flex-shrink: 0;
-}
-.lp-cover img { width: 100%; height: 100%; object-fit: cover; }
-.lp-info { margin-bottom: 16px; }
-.lp-title { font-size: 18px; font-weight: 700; }
-.lp-artist { font-size: 14px; color: var(--text-sub); margin-top: 4px; }
 .lp-lyrics {
   flex: 1; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 14px;
-  padding: 8px 0;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 20px 12px;
   scroll-behavior: smooth;
   text-align: center;
 }
 .lp-lyrics p {
-  font-size: 15px; color: var(--text-muted); line-height: 1.4;
-  transition: color 0.2s, transform 0.2s; font-weight: 600;
+  font-size: 15px; color: var(--text-muted); line-height: 1.6;
+  transition: color 0.2s, transform 0.2s, font-size 0.2s; font-weight: 600;
+  padding: 4px 0;
 }
-.lp-lyrics p.active { color: var(--green); transform: scale(1.06); }
+.lp-lyrics p.active {
+  color: var(--green); transform: scale(1.08); font-size: 17px;
+}
 .lp-placeholder { color: var(--text-muted); }
 
 /* ===== 播放条 ===== */

@@ -399,9 +399,6 @@ function playPath(path) {
   $('now-title').textContent = s.title;
   $('now-artist').textContent = s.artist;
   $('now-cover').innerHTML = coverHTML(path);
-  $('lp-title').textContent = s.title;
-  $('lp-artist').textContent = s.artist;
-  $('lp-cover').innerHTML = coverHTML(path, '🎵');
   $('like-btn').classList.toggle('liked', favorites.includes(path));
   $('like-btn').textContent = favorites.includes(path) ? '♥' : '♡';
 
@@ -548,8 +545,10 @@ function syncLyrics(t) {
   const active = box.querySelector(`p[data-i="${idx}"]`);
   if (active) {
     active.classList.add('active');
-    const offset = active.offsetTop - box.clientHeight / 2 + active.clientHeight / 2;
-    box.scrollTo({ top: offset, behavior: 'smooth' });
+    // 始终居中:当前行的中心对齐到容器中心
+    const containerCenter = box.clientHeight / 2;
+    const activeCenter = active.offsetTop + active.clientHeight / 2;
+    box.scrollTo({ top: activeCenter - containerCenter, behavior: 'smooth' });
   }
 }
 
@@ -657,26 +656,46 @@ $('play-btn').addEventListener('click', togglePlay);
 $('next-btn').addEventListener('click', playNext);
 $('prev-btn').addEventListener('click', playPrev);
 
-$('shuffle-btn').addEventListener('click', () => {
-  playMode = playMode === 'shuffle' ? 'list' : 'shuffle';
+// 播放模式切换:list → all → one → shuffle → list
+$('mode-btn').addEventListener('click', () => {
+  const modes = ['list', 'all', 'one', 'shuffle'];
+  const cur = modes.indexOf(playMode);
+  playMode = modes[(cur + 1) % modes.length];
   applyModeUI();
 });
-$('repeat-btn').addEventListener('click', () => {
-  // list -> all -> one -> list
-  playMode = playMode === 'list' || playMode === 'shuffle' ? 'all'
-    : playMode === 'all' ? 'one' : 'list';
-  applyModeUI();
-});
+
 function applyModeUI() {
   LS.set('playMode', playMode);
-  $('shuffle-btn').classList.toggle('active', playMode === 'shuffle');
-  $('repeat-btn').classList.toggle('active', playMode === 'all' || playMode === 'one');
-  $('repeat-btn').title = playMode === 'one' ? '单曲循环' : playMode === 'all' ? '列表循环' : '循环模式';
-  // 单曲循环加角标
-  $('repeat-btn').innerHTML = playMode === 'one'
-    ? '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="12" y="15" font-size="8" fill="currentColor" text-anchor="middle" font-weight="bold">1</text></svg>'
-    : '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>';
+  const btn = $('mode-btn');
+  const icon = $('mode-icon');
+  btn.classList.toggle('active', playMode !== 'list');
+
+  // 图标和提示
+  if (playMode === 'shuffle') {
+    btn.title = '随机播放';
+    icon.innerHTML = '<path fill="currentColor" d="M17 3l4 4-4 4V8h-2.5l-2.2 3.1-1.2-1.7L13 7h4V3zM3 7h4l3.1 4.4 3.6 5.1H21l-4 4v-3h-2.5l-3.6-5.1L8 8H3V7zm14 6.9l4 4-4 4V18h-2.3l-1.5-2.1 1.2-1.7 1.3 1.8H17v-2.1z"/>';
+  } else if (playMode === 'one') {
+    btn.title = '单曲循环';
+    icon.innerHTML = '<path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="12" y="15" font-size="8" fill="currentColor" text-anchor="middle" font-weight="bold">1</text>';
+  } else if (playMode === 'all') {
+    btn.title = '列表循环';
+    icon.innerHTML = '<path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>';
+  } else {
+    btn.title = '顺序播放';
+    icon.innerHTML = '<path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>';
+  }
 }
+
+// 定位当前播放
+$('locate-btn').addEventListener('click', () => {
+  if (!currentPath) return;
+  const row = document.querySelector(`.st-row[data-path="${CSS.escape(currentPath)}"]`);
+  if (row) {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.style.animation = 'none';
+    setTimeout(() => { row.style.animation = 'highlight-flash 0.6s ease'; }, 10);
+  }
+});
 
 $('like-btn').addEventListener('click', () => {
   if (!currentPath) return;
