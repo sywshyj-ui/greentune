@@ -475,6 +475,11 @@ function showContextMenu(x, y, path) {
   menu.id = 'ctx-menu';
 
   const items = [];
+  // 当前选中的行(支持多选批量删除)
+  const selPaths = Array.from(document.querySelectorAll('.st-row.selected'))
+    .map((r) => r.dataset.path).filter(Boolean);
+  const multi = selPaths.length > 1 && selPaths.includes(path);
+
   items.push({ label: '▶ 播放', fn: () => playPath(path) });
   items.push({ label: liked ? '♥ 取消喜欢' : '♡ 添加到喜欢', fn: () => toggleFav(path) });
   items.push({ label: '＋ 加入歌单…', sub: playlists.length ? playlists.map((p) => ({
@@ -483,7 +488,14 @@ function showContextMenu(x, y, path) {
   if (inPl) items.push({ label: '✕ 从此歌单移除', fn: () => removeFromPlaylist(path, inPl) });
   items.push({ label: '🔄 补全歌曲信息', fn: () => completeSongInfo(path) });
   items.push({ sep: true });
-  items.push({ label: '🗑 从音乐库删除', danger: true, fn: () => deleteSong(path) });
+  if (multi) {
+    // 多选时:批量删除选中的全部
+    items.push({ label: `🗑 删除选中的 ${selPaths.length} 首`, danger: true, fn: () => {
+      if (confirm(`确定从音乐库删除选中的 ${selPaths.length} 首歌吗?(不会删除磁盘文件)`)) deleteSongs(selPaths);
+    } });
+  } else {
+    items.push({ label: '🗑 从音乐库删除', danger: true, fn: () => deleteSong(path) });
+  }
 
   menu.innerHTML = items.map((it, i) => {
     if (it.sep) return '<div class="ctx-sep"></div>';
