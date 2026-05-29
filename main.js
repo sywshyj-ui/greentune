@@ -82,6 +82,77 @@ ipcMain.handle('http-get', async (_e, url) => {
   });
 });
 
+// 通用 HTTP GET,可自定义 Referer(QQ 音乐等需要不同 Referer)
+function httpGetRaw(url, referer) {
+  return new Promise((resolve, reject) => {
+    const request = net.request({
+      url,
+      headers: { 'Referer': referer || '', 'User-Agent': 'Mozilla/5.0' }
+    });
+    let body = '';
+    request.on('response', (response) => {
+      response.on('data', (chunk) => { body += chunk.toString(); });
+      response.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch { resolve(body); }
+      });
+    });
+    request.on('error', (err) => reject(err.message));
+    request.end();
+  });
+}
+
+// ---- QQ 音乐:搜索 ----
+ipcMain.handle('qq-search', async (_e, keyword, limit) => {
+  const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=1&n=${limit || 50}&format=json`;
+  try {
+    const data = await httpGetRaw(url, 'https://y.qq.com');
+    const list = (data && data.data && data.data.song && data.data.song.list) || [];
+    return list.map((s) => ({
+      id: s.songmid,
+      name: s.songname,
+      artists: (s.singer || []).map((a) => ({ name: a.name })),
+      album: { name: s.albumname || 'Unknown', mid: s.albummid || '' },
+      duration: (s.interval || 0) * 1000,
+      picUrl: s.albummid ? `https://y.qq.com/music/photo_new/T002R300x300M000${s.albummid}.jpg` : ''
+    }));
+  } catch (e) {
+    return [];
+  }
+});
+
+// ---- QQ 音乐:获取试听 URL ----
+ipcMain.handle('qq-url', async (_e, songmid) => {
+  const data = {
+    req_0: {
+      module: 'vkey.GetVkeyServer',
+      method: 'CgiGetVkey',
+      param: { guid: '10000', songmid: [songmid], songtype: [0], uin: '0', loginflag: 1, platform: '20' }
+    }
+  };
+  const url = `https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=${encodeURIComponent(JSON.stringify(data))}`;
+  try {
+    const r = await httpGetRaw(url, 'https://y.qq.com');
+    const info = r && r.req_0 && r.req_0.data;
+    if (!info || !info.midurlinfo || !info.midurlinfo[0]) return null;
+    const purl = info.midurlinfo[0].purl;
+    if (!purl) return null; // 需要会员
+    return info.sip[0] + purl;
+  } catch (e) {
+    return null;
+  }
+});
+
+// ---- QQ 音乐:获取歌词 ----
+ipcMain.handle('qq-lyric', async (_e, songmid) => {
+  const url = `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${songmid}&format=json&nobase64=1`;
+  try {
+    const r = await httpGetRaw(url, 'https://y.qq.com');
+    return (r && r.lyric) || null;
+  } catch (e) {
+    return null;
+  }
+});
+
 function scanDir(dir) {
   let out = [];
   let entries = [];
@@ -98,6 +169,23 @@ function scanDir(dir) {
 }
 
 // ---- Metadata (ID3 + cover) ----
+// 修复中文 ID3 标签乱码:很多中文 MP3 的标签是 GBK 编码,
+// jsmediatags 按 Latin-1 读出来会变乱码,这里重新按 GBK 解码
+function fixGBK(str) {
+  if (!str || typeof str !== 'string') return str;
+  // 已经包含正常中文,说明编码正确,直接返回
+  if (/[一-鿿]/.test(str)) return str;
+  // 含有高位 Latin-1 字符,很可能是 GBK 被误读
+  if (/[-ÿ]/.test(str)) {
+    try {
+      const buf = Buffer.from(str, 'latin1');
+      const dec = iconv.decode(buf, 'gbk');
+      if (/[一-鿿]/.test(dec) && !dec.includes('�')) return dec;
+    } catch {}
+  }
+  return str;
+}
+
 function readMeta(filePath) {
   return new Promise((resolve) => {
     const fallback = {
@@ -123,11 +211,11 @@ function readMeta(filePath) {
           }
           resolve({
             filePath,
-            title: t.title || fallback.title,
-            artist: t.artist || fallback.artist,
-            album: t.album || fallback.album,
+            title: fixGBK(t.title) || fallback.title,
+            artist: fixGBK(t.artist) || fallback.artist,
+            album: fixGBK(t.album) || fallback.album,
             year: t.year || '',
-            genre: t.genre || '',
+            genre: fixGBK(t.genre) || '',
             cover
           });
         },
