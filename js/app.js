@@ -108,6 +108,10 @@ function sortPaths(paths) {
 }
 
 function render() {
+  // 防线:当前 view 指向已被删除的歌单时,自动退回主页(避免删了还显示旧内容)
+  if (view.startsWith('pl:') && !playlists.find((p) => p.id === view.slice(3))) view = 'home';
+  if (view.startsWith('opl:') && !onlinePlaylists.find((p) => p.id === view.slice(4))) view = 'home';
+
   // 标题
   let title = VIEW_TITLES[view] || '主页';
   if (view.startsWith('pl:')) {
