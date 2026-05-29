@@ -361,28 +361,32 @@ function deleteSong(path) {
 // 批量删除(全选/多选后按 Delete):一次性处理并只渲染一次
 function deleteSongs(paths) {
   if (!paths || !paths.length) return;
-  const set = new Set(paths);
-  // 若正在播放的歌在删除列表里,先停掉
-  if (currentPath && set.has(currentPath)) {
-    audio.pause();
-    audio.removeAttribute('src');
-    audio.load();
-    currentPath = null;
-    $('now-title').textContent = '未播放';
-    $('now-artist').textContent = '选择一首歌曲开始';
-    $('now-cover').classList.remove('rotating');
+  try {
+    const set = new Set(paths);
+    // 若正在播放的歌在删除列表里,先停掉
+    if (currentPath && set.has(currentPath)) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      currentPath = null;
+      $('now-title').textContent = '未播放';
+      $('now-artist').textContent = '选择一首歌曲开始';
+      $('now-cover').classList.remove('rotating');
+    }
+    library = library.filter((s) => !set.has(s.filePath));
+    favorites = favorites.filter((p) => !set.has(p));
+    recent = recent.filter((p) => !set.has(p));
+    playlists.forEach((pl) => { pl.songs = pl.songs.filter((p) => !set.has(p)); });
+    paths.forEach((p) => { delete coverCache[p]; });
+    saveLib();
+    LS.set('favorites', favorites);
+    LS.set('recent', recent);
+    LS.set('playlists', playlists);
+    renderPlaylists();
+    render();
+  } catch (err) {
+    console.error('deleteSongs error', err);
   }
-  library = library.filter((s) => !set.has(s.filePath));
-  favorites = favorites.filter((p) => !set.has(p));
-  recent = recent.filter((p) => !set.has(p));
-  playlists.forEach((pl) => { pl.songs = pl.songs.filter((p) => !set.has(p)); });
-  paths.forEach((p) => { delete coverCache[p]; });
-  saveLib();
-  LS.set('favorites', favorites);
-  LS.set('recent', recent);
-  LS.set('playlists', playlists);
-  renderPlaylists();
-  render();
 }
 // 归一化:去空格、转小写,用于判断标题+歌手是否相同
 function dupKey(s) {
