@@ -470,6 +470,11 @@ body {
   width: auto; height: auto; border-radius: 999px; padding: 10px 20px; font-size: 14px;
 }
 
+/* ===== 导入网易云歌单弹窗 ===== */
+.import-tip { font-size: 12px; color: var(--text-muted); margin-top: 10px; line-height: 1.6; }
+.import-status { font-size: 13px; color: var(--green); margin-top: 12px; min-height: 18px; }
+.primary-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
 /* ===== 均衡器 ===== */
 .eq-box { width: 520px; max-width: 90%; }
 .eq-presets {

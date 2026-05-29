@@ -27,6 +27,11 @@ let sortKey = LS.get('sortKey', '');       // ''|title|artist|album|duration
 let sortAsc = LS.get('sortAsc', true);
 let onlineResults = [];                    // 在线搜索结果
 let onlineQuery = '';                      // 当前在线搜索关键词
+let onlinePlaylists = LS.get('onlinePlaylists', []); // 导入的在线歌单 {id,name,source,songs:[{neid,name,artist,album,picUrl,duration}]}
+// 在线歌单播放状态:网易云歌单的歌经 QQ 解析后播放,需独立的队列以支持自动下一首
+let onlinePlaylistMode = false;            // 当前是否在播放“在线歌单”里的歌
+let onlinePlayList = null;                 // 正在播放的在线歌单 songs 数组
+let onlinePlayIdx = -1;                    // 在该数组中的索引
 
 // Web Audio 频谱
 let audioCtx = null;
@@ -70,6 +75,7 @@ function computeQueue() {
   if (view === 'favorites') paths = favorites.filter(byPath);
   else if (view === 'recent') paths = recent.filter(byPath);
   else if (view === 'online' || view === 'recommend') return []; // 在线搜索和推荐不用 queue,直接渲染 onlineResults
+  else if (view.startsWith('opl:')) return []; // 在线歌单单独渲染
   else if (view.startsWith('pl:')) {
     const pl = playlists.find((p) => p.id === view.slice(3));
     paths = pl ? pl.songs.filter(byPath) : [];
@@ -107,6 +113,9 @@ function render() {
   if (view.startsWith('pl:')) {
     const pl = playlists.find((p) => p.id === view.slice(3));
     title = pl ? pl.name : '歌单';
+  } else if (view.startsWith('opl:')) {
+    const opl = onlinePlaylists.find((p) => p.id === view.slice(4));
+    title = opl ? opl.name : '在线歌单';
   }
   $('view-title').textContent = title;
 
@@ -122,6 +131,20 @@ function render() {
   const body = $('song-body');
   const empty = $('empty-state');
   const table = $('song-table');
+
+  // —— 在线类视图(搜索/推荐/导入的在线歌单)单独渲染,不走本地空状态逻辑 ——
+  if (view === 'online' || view === 'recommend') {
+    $('view-count').textContent = onlineResults.length ? `${onlineResults.length} 首歌曲` : '';
+    renderOnlineRows(onlineResults, view === 'recommend' ? '推荐' : '在线',
+      view === 'recommend' ? '先听几首歌,稍后这里会有推荐' : '输入关键词搜索在线音乐');
+    return;
+  }
+  if (view.startsWith('opl:')) {
+    const opl = onlinePlaylists.find((p) => p.id === view.slice(4));
+    $('view-count').textContent = (opl && opl.songs.length) ? `${opl.songs.length} 首歌曲` : '';
+    renderOnlinePlaylistRows(opl);
+    return;
+  }
 
   if (!queue.length) {
     table.hidden = true;
@@ -139,33 +162,6 @@ function render() {
 
   table.hidden = false;
   empty.hidden = true;
-
-  // 在线搜索和推荐结果渲染
-  if (view === 'online' || view === 'recommend') {
-    body.innerHTML = onlineResults.map((s, i) => {
-      const playing = currentPath === s.id;
-      return `<div class="st-row ${playing ? 'playing' : ''}" data-online-id="${s.id}">
-        <div class="row-idx">
-          <span class="num">${i + 1}</span>
-          <span class="play-mark">▶</span>
-        </div>
-        <div class="row-main">
-          <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
-          <div class="row-text">
-            <span class="row-title">${esc(s.name)}</span>
-            <span class="row-artist">${esc(s.artists.map(a => a.name).join(', '))}</span>
-          </div>
-        </div>
-        <div class="row-album">${esc(s.album.name)}</div>
-        <div class="row-genre">${view === 'recommend' ? '推荐' : '在线'}</div>
-        <div class="row-dur">${fmt(s.duration / 1000)}</div>
-      </div>`;
-    }).join('');
-    body.querySelectorAll('.st-row').forEach((row) => {
-      row.addEventListener('click', () => playOnline(row.dataset.onlineId));
-    });
-    return;
-  }
 
   // 本地歌曲渲染
   body.innerHTML = queue.map((path, i) => {
@@ -203,6 +199,73 @@ function render() {
   });
 
   updateSortIndicators();
+}
+
+// 渲染在线搜索/推荐结果(QQ 搜索结果结构:name/artists[]/album.name/duration)
+function renderOnlineRows(list, genreLabel, emptyHint) {
+  const body = $('song-body'), empty = $('empty-state'), table = $('song-table');
+  if (!list || !list.length) {
+    table.hidden = true;
+    empty.hidden = false;
+    $('empty-title').textContent = '🔍 在线音乐';
+    $('empty-sub').textContent = emptyHint || '输入关键词搜索';
+    return;
+  }
+  table.hidden = false;
+  empty.hidden = true;
+  body.innerHTML = list.map((s, i) => {
+    const playing = currentPath === s.id;
+    return `<div class="st-row ${playing ? 'playing' : ''}" data-online-id="${s.id}">
+      <div class="row-idx"><span class="num">${i + 1}</span><span class="play-mark">▶</span></div>
+      <div class="row-main">
+        <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
+        <div class="row-text">
+          <span class="row-title">${esc(s.name)}</span>
+          <span class="row-artist">${esc(s.artists.map(a => a.name).join(', '))}</span>
+        </div>
+      </div>
+      <div class="row-album">${esc(s.album.name)}</div>
+      <div class="row-genre">${genreLabel}</div>
+      <div class="row-dur">${fmt(s.duration / 1000)}</div>
+    </div>`;
+  }).join('');
+  body.querySelectorAll('.st-row').forEach((row) => {
+    row.addEventListener('click', () => playOnline(row.dataset.onlineId));
+  });
+}
+
+// 渲染导入的在线歌单(网易云元数据,点击经 QQ 解析播放)
+function renderOnlinePlaylistRows(opl) {
+  const body = $('song-body'), empty = $('empty-state'), table = $('song-table');
+  const songs = opl ? opl.songs : [];
+  if (!songs.length) {
+    table.hidden = true;
+    empty.hidden = false;
+    $('empty-title').textContent = '空歌单';
+    $('empty-sub').textContent = '这个在线歌单没有歌曲';
+    return;
+  }
+  table.hidden = false;
+  empty.hidden = true;
+  body.innerHTML = songs.map((s, i) => {
+    const playing = onlinePlaylistMode && onlinePlayList === opl.songs && onlinePlayIdx === i;
+    return `<div class="st-row ${playing ? 'playing' : ''}" data-opl-idx="${i}">
+      <div class="row-idx"><span class="num">${i + 1}</span><span class="play-mark">▶</span></div>
+      <div class="row-main">
+        <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
+        <div class="row-text">
+          <span class="row-title">${esc(s.name)}</span>
+          <span class="row-artist">${esc(s.artist)}</span>
+        </div>
+      </div>
+      <div class="row-album">${esc(s.album)}</div>
+      <div class="row-genre">网易云</div>
+      <div class="row-dur">${s.duration ? fmt(s.duration / 1000) : '—'}</div>
+    </div>`;
+  }).join('');
+  body.querySelectorAll('.st-row').forEach((row) => {
+    row.addEventListener('click', () => playFromOnlinePlaylist(opl.id, +row.dataset.oplIdx));
+  });
 }
 
 // ===== 排序 =====
@@ -472,7 +535,13 @@ function renderPlaylists() {
       <span class="pl-ico">🎵</span>
       <div class="pl-meta"><span class="pl-name">${esc(p.name)}</span><span class="pl-sub">${p.songs.length} 首</span></div>
     </div>`).join('');
-  list.innerHTML = fixed + custom;
+  // 导入的在线歌单(网易云),用 ☁ 区分
+  const online = onlinePlaylists.map((p) => `
+    <div class="pl-item" data-view="opl:${p.id}" data-opl-id="${p.id}">
+      <span class="pl-ico">☁</span>
+      <div class="pl-meta"><span class="pl-name">${esc(p.name)}</span><span class="pl-sub">${p.songs.length} 首 · 网易云</span></div>
+    </div>`).join('');
+  list.innerHTML = fixed + custom + online;
   list.querySelectorAll('.pl-item').forEach((el) => {
     el.addEventListener('click', () => { view = el.dataset.view; render(); });
     const plId = el.dataset.plId;
@@ -482,6 +551,51 @@ function renderPlaylists() {
         showPlaylistMenu(e.clientX, e.clientY, plId);
       });
     }
+    const oplId = el.dataset.oplId;
+    if (oplId) {
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showOnlinePlaylistMenu(e.clientX, e.clientY, oplId);
+      });
+    }
+  });
+}
+
+// ===== 在线歌单右键菜单(重命名/删除) =====
+function showOnlinePlaylistMenu(x, y, plId) {
+  closeContextMenu();
+  const pl = onlinePlaylists.find((p) => p.id === plId);
+  if (!pl) return;
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `
+    <div class="ctx-item" data-action="rename">✏ 重命名</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item danger" data-action="delete">🗑 删除歌单</div>
+  `;
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+
+  menu.querySelector('[data-action="rename"]').addEventListener('click', () => {
+    closeContextMenu();
+    const name = prompt('重命名歌单:', pl.name);
+    if (name && name.trim()) {
+      pl.name = name.trim();
+      LS.set('onlinePlaylists', onlinePlaylists);
+      renderPlaylists();
+      if (view === 'opl:' + plId) render();
+    }
+  });
+  menu.querySelector('[data-action="delete"]').addEventListener('click', () => {
+    closeContextMenu();
+    if (!confirm(`确定删除在线歌单「${pl.name}」吗?`)) return;
+    onlinePlaylists = onlinePlaylists.filter((p) => p.id !== plId);
+    LS.set('onlinePlaylists', onlinePlaylists);
+    if (view === 'opl:' + plId) { view = 'home'; render(); }
+    renderPlaylists();
   });
 }
 
@@ -558,6 +672,7 @@ function ensureAudioGraph() {
 function playPath(path) {
   const s = byPath(path);
   if (!s) return;
+  onlinePlaylistMode = false; // 切回本地播放,退出在线歌单连播
   currentPath = path;
   audio.src = 'file://' + path.replace(/\\/g, '/').replace(/#/g, '%23');
   audio.play().catch((e) => console.error('play error', e));
@@ -601,18 +716,45 @@ function nextIndex(dir) {
   return i;
 }
 
+// 在线歌单连播时算下一首索引(shuffle 随机,否则顺序循环)
+function onlineNextIdx(dir) {
+  const n = onlinePlayList.length;
+  if (n <= 1) return 0;
+  if (playMode === 'shuffle') {
+    let r; do { r = Math.floor(Math.random() * n); } while (r === onlinePlayIdx);
+    return r;
+  }
+  return (onlinePlayIdx + dir + n) % n;
+}
+
 function playNext() {
+  if (onlinePlaylistMode && onlinePlayList && onlinePlayList.length) {
+    onlinePlayIdx = onlineNextIdx(1);
+    resolveOnlineAndPlay(onlinePlayList[onlinePlayIdx]);
+    return;
+  }
   const i = nextIndex(1);
   if (i >= 0) playPath(queue[i]);
 }
 function playPrev() {
   if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+  if (onlinePlaylistMode && onlinePlayList && onlinePlayList.length) {
+    onlinePlayIdx = onlineNextIdx(-1);
+    resolveOnlineAndPlay(onlinePlayList[onlinePlayIdx]);
+    return;
+  }
   const i = nextIndex(-1);
   if (i >= 0) playPath(queue[i]);
 }
 
 function onEnded() {
   if (playMode === 'one') { audio.currentTime = 0; audio.play(); return; }
+  // 在线歌单连播
+  if (onlinePlaylistMode && onlinePlayList && onlinePlayList.length) {
+    if (playMode === 'list' && onlinePlayIdx === onlinePlayList.length - 1) { setPlayIcon(false); return; }
+    playNext();
+    return;
+  }
   const cur = queue.indexOf(currentPath);
   if (playMode === 'list' && cur === queue.length - 1) { setPlayIcon(false); return; }
   playNext();
@@ -1084,6 +1226,67 @@ function createPlaylist() {
   renderPlaylists();
 }
 
+// ===== 导入网易云歌单 =====
+// 从粘贴的链接/文本里提取歌单 ID
+function parsePlaylistId(text) {
+  if (!text) return null;
+  const t = text.trim();
+  if (/^\d+$/.test(t)) return t;            // 纯数字 = 歌单ID
+  let m = t.match(/[?&]id=(\d+)/);           // ...?id=123 / &id=123
+  if (m) return m[1];
+  m = t.match(/playlist\/(\d+)/);            // .../playlist/123
+  if (m) return m[1];
+  m = t.match(/(\d{6,})/);                   // 兜底:抓一长串数字
+  return m ? m[1] : null;
+}
+
+const importBtn = $('import-pl');
+if (importBtn) {
+  importBtn.addEventListener('click', () => {
+    $('import-modal').hidden = false;
+    $('import-url-input').value = '';
+    $('import-status').textContent = '';
+    $('import-url-input').focus();
+  });
+}
+$('import-cancel').addEventListener('click', () => { $('import-modal').hidden = true; });
+$('import-url-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doImportPlaylist();
+  if (e.key === 'Escape') $('import-modal').hidden = true;
+});
+$('import-confirm').addEventListener('click', doImportPlaylist);
+
+async function doImportPlaylist() {
+  const id = parsePlaylistId($('import-url-input').value);
+  const status = $('import-status');
+  if (!id) { status.textContent = '没识别到歌单 ID,请粘贴完整链接'; return; }
+  status.textContent = '正在拉取歌单…';
+  $('import-confirm').disabled = true;
+  try {
+    const data = await window.api.neteasePlaylist(id);
+    if (!data || !data.songs || !data.songs.length) {
+      status.textContent = '拉取失败:歌单为空或无法访问(可能是私密歌单)';
+      return;
+    }
+    // 同一个网易云歌单(按 neid 去重)重复导入时更新而非新增
+    const existed = onlinePlaylists.find((p) => p.neid === id);
+    const pl = existed || { id: 'opl' + Date.now(), neid: id, name: data.name, source: 'netease', songs: [] };
+    pl.name = data.name;
+    pl.songs = data.songs;
+    if (!existed) onlinePlaylists.push(pl);
+    LS.set('onlinePlaylists', onlinePlaylists);
+    renderPlaylists();
+    $('import-modal').hidden = true;
+    view = 'opl:' + pl.id;
+    render();
+  } catch (e) {
+    console.error('导入失败:', e);
+    status.textContent = '导入失败,请检查网络连接';
+  } finally {
+    $('import-confirm').disabled = false;
+  }
+}
+
 // 窗口控制
 $('win-min').addEventListener('click', () => window.api.minimize());
 $('win-max').addEventListener('click', () => window.api.maximize());
@@ -1227,6 +1430,7 @@ async function searchOnlineMusic(keyword) {
 async function playOnline(songId) {
   const song = onlineResults.find((s) => s.id == songId);
   if (!song) return;
+  onlinePlaylistMode = false; // 普通在线搜索播放,非歌单连播
   try {
     const playUrl = await window.api.qqUrl(songId);
     if (!playUrl) { alert('该歌曲为付费/会员歌曲,无法试听'); return; }
@@ -1247,6 +1451,48 @@ async function playOnline(songId) {
     render();
   } catch (e) {
     console.error('播放失败:', e);
+    alert('播放失败,请重试');
+  }
+}
+
+// ===== 在线歌单播放(列表来自网易云,播放经 QQ 音乐解析) =====
+async function playFromOnlinePlaylist(plId, idx) {
+  const pl = onlinePlaylists.find((p) => p.id === plId);
+  if (!pl || !pl.songs[idx]) return;
+  onlinePlaylistMode = true;
+  onlinePlayList = pl.songs;
+  onlinePlayIdx = idx;
+  await resolveOnlineAndPlay(pl.songs[idx]);
+}
+
+// 用 QQ 音乐按歌名+歌手搜一首并播放;界面信息仍用网易云的元数据(更贴合用户歌单)
+async function resolveOnlineAndPlay(meta) {
+  const titleEl = $('now-title'), artistEl = $('now-artist'), coverEl = $('now-cover');
+  titleEl.textContent = meta.name;
+  artistEl.textContent = '正在解析…';
+  try {
+    const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
+    const q = (meta.name + ' ' + realArtist).trim();
+    const results = await window.api.qqSearch(q, 1);
+    const song = results && results[0];
+    if (!song || !song.id) { artistEl.textContent = meta.artist; alert('未找到可播放资源:' + meta.name); return; }
+    const playUrl = await window.api.qqUrl(song.id);
+    if (!playUrl) { artistEl.textContent = meta.artist; alert('「' + meta.name + '」为付费/会员歌曲,无法试听'); return; }
+    currentPath = String(song.id);
+    audio.src = playUrl;
+    audio.play().catch((e) => console.error('播放失败', e));
+    titleEl.textContent = meta.name;
+    artistEl.textContent = meta.artist;
+    coverEl.innerHTML = meta.picUrl ? `<img src="${meta.picUrl}?param=120y120" alt="">`
+      : (song.picUrl ? `<img src="${song.picUrl}" alt="">` : '<img src="assets/logo.jpg" alt="">');
+    coverEl.classList.add('rotating');
+    $('like-btn').classList.remove('liked');
+    $('like-btn').textContent = '♡';
+    loadOnlineLyrics(song.id);
+    render();
+  } catch (e) {
+    console.error('在线歌单播放失败:', e);
+    artistEl.textContent = meta.artist;
     alert('播放失败,请重试');
   }
 }

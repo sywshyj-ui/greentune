@@ -190,6 +190,37 @@ ipcMain.handle('qq-lyric', async (_e, songmid) => {
   }
 });
 
+// ---- 网易云音乐:获取歌单详情 ----
+// 带 music.163.com 的 Referer 直接读取公开歌单。优先用旧版 detail(一次返回完整 tracks),
+// 失败再退回 v6。只取列表信息(歌名/歌手/封面/时长),实际播放交给 QQ 音乐解析。
+ipcMain.handle('netease-playlist', async (_e, id) => {
+  const tryUrls = [
+    `https://music.163.com/api/playlist/detail?id=${id}`,
+    `https://music.163.com/api/v6/playlist/detail?id=${id}&n=1000`
+  ];
+  for (const url of tryUrls) {
+    try {
+      const r = await httpGetRaw(url, 'https://music.163.com');
+      const pl = r && (r.result || r.playlist);
+      const tracks = pl && pl.tracks;
+      if (!pl || !Array.isArray(tracks) || !tracks.length) continue;
+      const songs = tracks.map((t) => ({
+        neid: t.id,
+        // 旧接口字段为 artists/album/duration,新接口为 ar/al/dt,两者都兼容
+        name: t.name || '未知歌曲',
+        artist: ((t.artists || t.ar || []).map((a) => a.name).join(', ')) || 'Unknown Artist',
+        album: ((t.album && t.album.name) || (t.al && t.al.name)) || 'Unknown Album',
+        picUrl: (t.album && t.album.picUrl) || (t.al && t.al.picUrl) || '',
+        duration: t.duration || t.dt || 0
+      }));
+      return { name: pl.name || '网易云歌单', count: songs.length, songs };
+    } catch (e) {
+      // 试下一个接口
+    }
+  }
+  return null;
+});
+
 function scanDir(dir) {
   let out = [];
   let entries = [];

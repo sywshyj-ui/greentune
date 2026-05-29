@@ -51,6 +51,7 @@
         <div class="card-head">
           <span class="card-title">我的歌单</span>
           <div style="display:flex; gap:4px;">
+            <button class="card-add" id="import-pl" title="导入网易云歌单" style="font-size:14px;">🔗</button>
             <button class="card-add" id="find-dup" title="查找重复歌曲" style="font-size:14px;">⧉</button>
             <button class="card-add" id="create-pl" title="新建歌单">＋</button>
           </div>
@@ -210,6 +211,20 @@
       </div>
       <div class="modal-actions">
         <button class="ghost-btn" id="eq-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入网易云歌单弹窗 -->
+  <div class="modal" id="import-modal" hidden>
+    <div class="modal-box">
+      <h3>导入网易云歌单</h3>
+      <input type="text" id="import-url-input" placeholder="粘贴网易云歌单链接或歌单ID">
+      <p class="import-tip">例：https://music.163.com/playlist?id=123456<br>列表来自网易云，播放通过 QQ 音乐试听</p>
+      <div class="import-status" id="import-status"></div>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="import-cancel">取消</button>
+        <button class="primary-btn" id="import-confirm">导入</button>
       </div>
     </div>
   </div>

@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   qqSearch: (keyword, limit) => ipcRenderer.invoke('qq-search', keyword, limit),
   qqUrl: (songmid) => ipcRenderer.invoke('qq-url', songmid),
   qqLyric: (songmid) => ipcRenderer.invoke('qq-lyric', songmid),
+  // 网易云音乐:拉取歌单详情
+  neteasePlaylist: (id) => ipcRenderer.invoke('netease-playlist', id),
   // 取拖拽 File 对象的真实磁盘路径(Electron 推荐方式)
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return file.path || ''; } }
 });
