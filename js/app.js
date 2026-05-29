@@ -58,9 +58,9 @@ const fmt = (s) => {
 };
 const esc = (s) => { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; };
 // 复制文本到剪贴板,成功后给个轻提示
-function copyText(text) {
+async function copyText(text) {
   if (!text) return;
-  const ok = window.api.copyText(text);
+  const ok = await window.api.copyText(text);
   toast(ok ? '已复制:' + text : '复制失败');
 }
 // 顶部轻提示(复用鼓励语 toast 的位置做个临时简易提示)

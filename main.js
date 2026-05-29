@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, net, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, net, Tray, Menu, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const iconv = require('iconv-lite');
@@ -298,6 +298,13 @@ ipcMain.handle('download-file', async (_e, url, suggestedName) => {
   });
 });
 
+// ---- 复制文本到系统剪贴板 ----
+// 渲染层 file:// 下 navigator.clipboard 不可用,preload 沙盒里的 clipboard 也可能失效,
+// 统一交主进程写剪贴板最稳妥。
+ipcMain.handle('copy-text', (_e, text) => {
+  try { clipboard.writeText(String(text ?? '')); return true; } catch { return false; }
+});
+
 // ---- 翻译(英文歌词 -> 中文) ----
 // 用有道公开 demo 接口(无需 key,国内可访问)。多行用 \n 拼成一次请求,译文也按 \n 切回各行。
 // 返回与输入等长的译文数组;失败返回 null。
@@ -440,6 +447,24 @@ ipcMain.handle('load-lrc', async (_e, musicPath) => {
 });
 
 app.whenReady().then(() => {
+  // 无边框窗口默认没有应用菜单,会导致输入框里 Ctrl+C/V/X/A 等编辑快捷键失效。
+  // 注册一个带编辑角色的菜单(无边框下菜单栏不显示,但快捷键生效),让复制粘贴可用。
+  const editMenu = Menu.buildFromTemplate([
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' }
+      ]
+    }
+  ]);
+  Menu.setApplicationMenu(editMenu);
+
   createWindow();
   createTray();
 });
