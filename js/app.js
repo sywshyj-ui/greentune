@@ -190,7 +190,12 @@ function render() {
   }).join('');
 
   body.querySelectorAll('.st-row').forEach((row) => {
-    row.addEventListener('click', () => playPath(row.dataset.path));
+    row.addEventListener('click', () => {
+      // 单击只选中,不播放
+      document.querySelectorAll('.st-row').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
+    });
+    row.addEventListener('dblclick', () => playPath(row.dataset.path));
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showContextMenu(e.clientX, e.clientY, row.dataset.path);
@@ -268,16 +273,17 @@ async function completeSongInfo(path) {
   const s = byPath(path);
   if (!s) return;
   try {
-    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(s.title + (s.artist ? ' ' + s.artist : ''))}&type=1&limit=1`;
+    const searchUrl = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(s.title + (s.artist ? ' ' + s.artist : ''))}&type=1&offset=0&limit=1`;
     const data = await window.api.httpGet(searchUrl);
     const song = data.result?.songs?.[0];
     if (!song) { alert('未找到匹配的在线歌曲信息'); return; }
 
     // 更新信息
-    s.artist = song.artists.map(a => a.name).join(', ');
-    s.album = song.album.name;
-    if (song.album.picUrl && !coverCache[path]) {
-      coverCache[path] = song.album.picUrl + '?param=200y200';
+    s.artist = (song.ar || song.artists || []).map(a => a.name).join(', ');
+    s.album = (song.al || song.album || {}).name || 'Unknown Album';
+    const picUrl = song.al?.picUrl || song.album?.picUrl;
+    if (picUrl && !coverCache[path]) {
+      coverCache[path] = picUrl + '?param=200y200';
     }
     saveLib();
     render();
@@ -492,7 +498,9 @@ function playPath(path) {
   // 现在播放信息
   $('now-title').textContent = s.title;
   $('now-artist').textContent = s.artist;
-  $('now-cover').innerHTML = coverHTML(path);
+  const coverEl = $('now-cover');
+  coverEl.innerHTML = coverHTML(path);
+  coverEl.classList.add('rotating');
   $('like-btn').classList.toggle('liked', favorites.includes(path));
   $('like-btn').textContent = favorites.includes(path) ? '♥' : '♡';
 
@@ -583,11 +591,12 @@ async function searchOnlineLyrics(title, artist) {
 
   try {
     // 搜索歌曲
-    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(title + ' ' + artist)}&type=1&limit=1`;
+    const searchUrl = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(title + ' ' + artist)}&type=1&offset=0&limit=1`;
     const searchData = await window.api.httpGet(searchUrl);
-    if (!searchData.result?.songs?.[0]?.id) return null;
+    const song = searchData.result?.songs?.[0];
+    if (!song?.id) return null;
 
-    const songId = searchData.result.songs[0].id;
+    const songId = song.id;
     // 获取歌词
     const lrcUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=-1`;
     const lrcData = await window.api.httpGet(lrcUrl);
@@ -674,11 +683,12 @@ async function importSongs(songs) {
 async function fetchOnlineCover(filePath, title, artist) {
   if (!title) return;
   try {
-    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(title + (artist ? ' ' + artist : ''))}&type=1&limit=1`;
+    const searchUrl = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(title + (artist ? ' ' + artist : ''))}&type=1&offset=0&limit=1`;
     const data = await window.api.httpGet(searchUrl);
     const song = data.result?.songs?.[0];
-    if (song?.album?.picUrl) {
-      coverCache[filePath] = song.album.picUrl + '?param=200y200';
+    const picUrl = song?.al?.picUrl || song?.album?.picUrl;
+    if (picUrl) {
+      coverCache[filePath] = picUrl + '?param=200y200';
       // 局部更新封面显示
       const coverEl = document.querySelector(`.st-row[data-path="${CSS.escape(filePath)}"] .row-cover`);
       if (coverEl) coverEl.innerHTML = `<img src="${coverCache[filePath]}" alt="">`;
@@ -1046,9 +1056,21 @@ async function searchOnlineMusic(keyword) {
   const body = $('song-body');
   body.innerHTML = '<div class="online-loading">正在搜索在线音乐…</div>';
   try {
-    const url = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=50`;
+    // 使用网易云新接口
+    const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&offset=0&limit=50`;
     const data = await window.api.httpGet(url);
-    onlineResults = (data.result && data.result.songs) || [];
+    if (data.result && data.result.songs) {
+      onlineResults = data.result.songs.map(s => ({
+        id: s.id,
+        name: s.name,
+        artists: s.ar || s.artists || [],
+        album: s.al || s.album || { name: 'Unknown' },
+        duration: s.dt || s.duration || 0,
+        picUrl: (s.al && s.al.picUrl) || (s.album && s.album.picUrl) || ''
+      }));
+    } else {
+      onlineResults = [];
+    }
     render();
   } catch (e) {
     console.error('在线搜索失败:', e);
@@ -1144,9 +1166,20 @@ async function loadRecommendations() {
   try {
     // 搜索热门艺术家的歌曲
     const keyword = topArtists[0];
-    const url = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=30`;
+    const url = `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&offset=0&limit=30`;
     const data = await window.api.httpGet(url);
-    onlineResults = (data.result && data.result.songs) || [];
+    if (data.result && data.result.songs) {
+      onlineResults = data.result.songs.map(s => ({
+        id: s.id,
+        name: s.name,
+        artists: s.ar || s.artists || [],
+        album: s.al || s.album || { name: 'Unknown' },
+        duration: s.dt || s.duration || 0,
+        picUrl: (s.al && s.al.picUrl) || (s.album && s.album.picUrl) || ''
+      }));
+    } else {
+      onlineResults = [];
+    }
     render();
   } catch (e) {
     console.error('推荐加载失败:', e);

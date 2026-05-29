@@ -16,7 +16,7 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     backgroundColor: '#121212',
-    title: 'GreenTune',
+    title: '浩哥的Music',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
