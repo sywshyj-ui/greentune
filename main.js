@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const iconv = require('iconv-lite');
@@ -59,6 +59,27 @@ ipcMain.handle('read-meta', async (_e, paths) => {
     return AUDIO_EXTS.includes(ext);
   });
   return Promise.all(audio.map(readMeta));
+});
+
+// HTTP 请求代理(主进程发请求,绕过渲染进程的 CORS 限制)
+ipcMain.handle('http-get', async (_e, url) => {
+  return new Promise((resolve, reject) => {
+    const request = net.request({
+      url,
+      // 网易云接口需要带 Referer,否则返回错误
+      headers: { 'Referer': 'https://music.163.com', 'User-Agent': 'Mozilla/5.0' }
+    });
+    let body = '';
+    request.on('response', (response) => {
+      response.on('data', (chunk) => { body += chunk.toString(); });
+      response.on('end', () => {
+        try { resolve(JSON.parse(body)); }
+        catch { resolve(body); }
+      });
+    });
+    request.on('error', (err) => reject(err.message));
+    request.end();
+  });
 });
 
 function scanDir(dir) {

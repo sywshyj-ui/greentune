@@ -16,7 +16,7 @@ let playlists = LS.get('playlists', []);   // {id,name,songs:[]}
 let volume = LS.get('volume', 0.8);
 let theme = LS.get('theme', 'dark');
 
-let view = 'home';                         // home|search|library|favorites|recent|pl:<id>
+let view = 'home';                         // home|search|library|favorites|recent|pl:<id>|online
 let queue = [];                            // 当前可见列表(filePath[])
 let currentPath = null;
 let playMode = LS.get('playMode', 'list'); // list|shuffle|one|all
@@ -25,6 +25,8 @@ let lrc = null;
 let lrcIdx = -1;
 let sortKey = LS.get('sortKey', '');       // ''|title|artist|album|duration
 let sortAsc = LS.get('sortAsc', true);
+let onlineResults = [];                    // 在线搜索结果
+let onlineQuery = '';                      // 当前在线搜索关键词
 
 // Web Audio 频谱
 let audioCtx = null;
@@ -32,6 +34,7 @@ let analyser = null;
 let source = null;
 let dataArray = null;
 let eqFilters = []; // 10 段均衡器滤波器
+let eqGains = LS.get('eqGains', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // 均衡器增益
 const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const EQ_PRESETS = {
   flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -60,12 +63,13 @@ function coverHTML(path, fallback = '🎵') {
 }
 
 // ===== 视图渲染 =====
-const VIEW_TITLES = { home: '主页', search: '搜索结果', library: '音乐库', favorites: '我喜欢', recent: '最近播放' };
+const VIEW_TITLES = { home: '主页', search: '搜索结果', library: '音乐库', favorites: '我喜欢', recent: '最近播放', online: '在线搜索', recommend: '为你推荐' };
 
 function computeQueue() {
   let paths;
   if (view === 'favorites') paths = favorites.filter(byPath);
   else if (view === 'recent') paths = recent.filter(byPath);
+  else if (view === 'online' || view === 'recommend') return []; // 在线搜索和推荐不用 queue,直接渲染 onlineResults
   else if (view.startsWith('pl:')) {
     const pl = playlists.find((p) => p.id === view.slice(3));
     paths = pl ? pl.songs.filter(byPath) : [];
@@ -135,6 +139,35 @@ function render() {
 
   table.hidden = false;
   empty.hidden = true;
+
+  // 在线搜索和推荐结果渲染
+  if (view === 'online' || view === 'recommend') {
+    body.innerHTML = onlineResults.map((s, i) => {
+      const playing = currentPath === s.id;
+      return `<div class="st-row ${playing ? 'playing' : ''}" data-online-id="${s.id}">
+        <div class="row-idx">
+          <span class="num">${i + 1}</span>
+          <span class="play-mark">▶</span>
+        </div>
+        <div class="row-main">
+          <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
+          <div class="row-text">
+            <span class="row-title">${esc(s.name)}</span>
+            <span class="row-artist">${esc(s.artists.map(a => a.name).join(', '))}</span>
+          </div>
+        </div>
+        <div class="row-album">${esc(s.album.name)}</div>
+        <div class="row-genre">${view === 'recommend' ? '推荐' : '在线'}</div>
+        <div class="row-dur">${fmt(s.duration / 1000)}</div>
+      </div>`;
+    }).join('');
+    body.querySelectorAll('.st-row').forEach((row) => {
+      row.addEventListener('click', () => playOnline(row.dataset.onlineId));
+    });
+    return;
+  }
+
+  // 本地歌曲渲染
   body.innerHTML = queue.map((path, i) => {
     const s = byPath(path);
     const playing = path === currentPath;
@@ -230,6 +263,35 @@ function deleteSong(path) {
   render();
 }
 
+// 补全歌曲信息
+async function completeSongInfo(path) {
+  const s = byPath(path);
+  if (!s) return;
+  try {
+    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(s.title + (s.artist ? ' ' + s.artist : ''))}&type=1&limit=1`;
+    const data = await window.api.httpGet(searchUrl);
+    const song = data.result?.songs?.[0];
+    if (!song) { alert('未找到匹配的在线歌曲信息'); return; }
+
+    // 更新信息
+    s.artist = song.artists.map(a => a.name).join(', ');
+    s.album = song.album.name;
+    if (song.album.picUrl && !coverCache[path]) {
+      coverCache[path] = song.album.picUrl + '?param=200y200';
+    }
+    saveLib();
+    render();
+    if (currentPath === path) {
+      $('now-artist').textContent = s.artist;
+      if (coverCache[path]) $('now-cover').innerHTML = `<img src="${coverCache[path]}" alt="">`;
+    }
+    alert('歌曲信息已更新');
+  } catch (e) {
+    console.error('信息补全失败:', e);
+    alert('信息补全失败,请检查网络连接');
+  }
+}
+
 // ===== 右键上下文菜单 =====
 function showContextMenu(x, y, path) {
   closeContextMenu();
@@ -249,6 +311,7 @@ function showContextMenu(x, y, path) {
     label: p.name, fn: () => addToPlaylist(path, p.id)
   })) : [{ label: '(暂无歌单,先新建)', disabled: true }] });
   if (inPl) items.push({ label: '✕ 从此歌单移除', fn: () => removeFromPlaylist(path, inPl) });
+  items.push({ label: '🔄 补全歌曲信息', fn: () => completeSongInfo(path) });
   items.push({ sep: true });
   items.push({ label: '🗑 从音乐库删除', danger: true, fn: () => deleteSong(path) });
 
@@ -521,15 +584,13 @@ async function searchOnlineLyrics(title, artist) {
   try {
     // 搜索歌曲
     const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(title + ' ' + artist)}&type=1&limit=1`;
-    const searchRes = await fetch(searchUrl, { method: 'GET' });
-    const searchData = await searchRes.json();
+    const searchData = await window.api.httpGet(searchUrl);
     if (!searchData.result?.songs?.[0]?.id) return null;
 
     const songId = searchData.result.songs[0].id;
     // 获取歌词
     const lrcUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&tv=-1`;
-    const lrcRes = await fetch(lrcUrl, { method: 'GET' });
-    const lrcData = await lrcRes.json();
+    const lrcData = await window.api.httpGet(lrcUrl);
     if (!lrcData.lrc?.lyric) return null;
 
     // 解析 LRC
@@ -598,10 +659,34 @@ async function importSongs(songs) {
     existing.add(s.filePath);
     added++;
     probeDuration(s.filePath);
+
+    // 如果没有封面,尝试在线获取
+    if (!s.cover && !coverCache[s.filePath]) {
+      fetchOnlineCover(s.filePath, s.title, s.artist);
+    }
   }
   saveLib();
   renderPlaylists();
   render();
+}
+
+// 在线获取封面
+async function fetchOnlineCover(filePath, title, artist) {
+  if (!title) return;
+  try {
+    const searchUrl = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(title + (artist ? ' ' + artist : ''))}&type=1&limit=1`;
+    const data = await window.api.httpGet(searchUrl);
+    const song = data.result?.songs?.[0];
+    if (song?.album?.picUrl) {
+      coverCache[filePath] = song.album.picUrl + '?param=200y200';
+      // 局部更新封面显示
+      const coverEl = document.querySelector(`.st-row[data-path="${CSS.escape(filePath)}"] .row-cover`);
+      if (coverEl) coverEl.innerHTML = `<img src="${coverCache[filePath]}" alt="">`;
+      if (currentPath === filePath) $('now-cover').innerHTML = `<img src="${coverCache[filePath]}" alt="">`;
+    }
+  } catch (e) {
+    console.error('封面获取失败:', e);
+  }
 }
 
 // 用隐藏 audio 探测时长(逐个,轻量)
@@ -744,13 +829,25 @@ $('vol-btn').addEventListener('click', () => {
 document.querySelectorAll('.nav-main .nav-item').forEach((n) => {
   n.addEventListener('click', () => {
     view = n.dataset.view;
-    if (view === 'search') setTimeout(() => $('search-input').focus(), 50);
+    if (view === 'search' || view === 'online') setTimeout(() => $('search-input').focus(), 50);
+    if (view === 'online') { $('search-input').placeholder = '搜索在线音乐…'; }
+    else { $('search-input').placeholder = '搜索歌曲、艺术家、专辑'; }
+    if (view === 'recommend') loadRecommendations();
     render();
   });
 });
 
 // 搜索
-$('search-input').addEventListener('input', () => { if (view !== 'search') view = 'search'; render(); });
+let onlineTimer = null;
+$('search-input').addEventListener('input', () => {
+  if (view === 'online') {
+    clearTimeout(onlineTimer);
+    onlineTimer = setTimeout(() => searchOnlineMusic($('search-input').value), 600);
+  } else {
+    if (view !== 'search') view = 'search';
+    render();
+  }
+});
 
 // 歌词面板
 $('lyrics-toggle').addEventListener('click', () => $('lyrics-panel').classList.toggle('hidden'));
@@ -933,7 +1030,7 @@ function initEQ() {
 }
 
 // 均衡器按钮(侧边栏底部已有,绑定打开弹窗)
-const eqBtn = document.querySelector('#btn-equalizer');
+const eqBtn = $('eq-btn');
 if (eqBtn) {
   eqBtn.addEventListener('click', () => {
     $('eq-modal').hidden = false;
@@ -941,6 +1038,121 @@ if (eqBtn) {
   });
 }
 $('eq-close').addEventListener('click', () => { $('eq-modal').hidden = true; });
+
+// ===== 在线音乐搜索与试听 =====
+async function searchOnlineMusic(keyword) {
+  if (!keyword || !keyword.trim()) { onlineResults = []; render(); return; }
+  onlineQuery = keyword;
+  const body = $('song-body');
+  body.innerHTML = '<div class="online-loading">正在搜索在线音乐…</div>';
+  try {
+    const url = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=50`;
+    const data = await window.api.httpGet(url);
+    onlineResults = (data.result && data.result.songs) || [];
+    render();
+  } catch (e) {
+    console.error('在线搜索失败:', e);
+    onlineResults = [];
+    body.innerHTML = '<div class="online-loading">搜索失败,请检查网络连接</div>';
+  }
+}
+
+async function playOnline(songId) {
+  const song = onlineResults.find((s) => s.id == songId);
+  if (!song) return;
+  try {
+    const url = `https://music.163.com/api/song/enhance/player/url?id=${songId}&ids=[${songId}]&br=320000`;
+    const data = await window.api.httpGet(url);
+    const playUrl = data.data && data.data[0] && data.data[0].url;
+    if (!playUrl) { alert('该歌曲暂无版权或无法播放'); return; }
+    currentPath = String(songId);
+    audio.src = playUrl;
+    audio.play().catch((e) => console.error('播放失败', e));
+    $('now-title').textContent = song.name;
+    $('now-artist').textContent = song.artists.map((a) => a.name).join(', ');
+    $('now-cover').innerHTML = song.album.picUrl ? `<img src="${song.album.picUrl}?param=56y56" alt="">` : '🎵';
+    $('like-btn').classList.remove('liked');
+    $('like-btn').textContent = '♡';
+    loadOnlineLyrics(songId);
+    render();
+  } catch (e) {
+    console.error('播放失败:', e);
+    alert('播放失败,请重试');
+  }
+}
+
+// 在线歌词获取
+async function loadOnlineLyrics(songId) {
+  lrc = null; lrcIdx = -1;
+  const box = $('lp-lyrics');
+  box.innerHTML = '<p class="lp-placeholder">正在加载歌词…</p>';
+  try {
+    const url = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
+    const data = await window.api.httpGet(url);
+    const raw = data.lrc && data.lrc.lyric;
+    if (path_changed(songId)) return;
+    if (!raw) { box.innerHTML = '<p class="lp-placeholder">暂无歌词</p>'; return; }
+    lrc = parseLrc(raw);
+    box.innerHTML = lrc.map((l, i) => `<p data-i="${i}">${esc(l.text)}</p>`).join('');
+  } catch (e) {
+    box.innerHTML = '<p class="lp-placeholder">歌词加载失败</p>';
+  }
+}
+
+function path_changed(songId) { return currentPath !== String(songId); }
+function parseLrc(raw) {
+  const out = [];
+  raw.split('\n').forEach((line) => {
+    const m = line.match(/\[(\d+):(\d+)(?:\.(\d+))?\]/g);
+    const text = line.replace(/\[.*?\]/g, '').trim();
+    if (!m || !text) return;
+    m.forEach((tag) => {
+      const t = tag.match(/\[(\d+):(\d+)(?:\.(\d+))?\]/);
+      const time = (+t[1]) * 60 + (+t[2]) + (t[3] ? (+t[3]) / (t[3].length === 2 ? 100 : 1000) : 0);
+      out.push({ time, text });
+    });
+  });
+  return out.sort((a, b) => a.time - b.time);
+}
+
+// ===== 音乐推荐 =====
+async function loadRecommendations() {
+  onlineResults = [];
+  const body = $('song-body');
+  body.innerHTML = '<div class="online-loading">正在生成推荐…</div>';
+
+  // 基于最常听的艺术家推荐
+  const artistCount = {};
+  favorites.concat(recent).forEach((path) => {
+    const s = byPath(path);
+    if (s && s.artist) {
+      const artist = s.artist.split(/[,，&、]/)[0].trim(); // 取第一个艺术家
+      artistCount[artist] = (artistCount[artist] || 0) + 1;
+    }
+  });
+
+  const topArtists = Object.entries(artistCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([artist]) => artist);
+
+  if (!topArtists.length) {
+    body.innerHTML = '<div class="online-loading">暂无推荐,先听几首歌吧~</div>';
+    return;
+  }
+
+  try {
+    // 搜索热门艺术家的歌曲
+    const keyword = topArtists[0];
+    const url = `https://music.163.com/api/search/get/web?s=${encodeURIComponent(keyword)}&type=1&limit=30`;
+    const data = await window.api.httpGet(url);
+    onlineResults = (data.result && data.result.songs) || [];
+    render();
+  } catch (e) {
+    console.error('推荐加载失败:', e);
+    body.innerHTML = '<div class="online-loading">推荐加载失败,请检查网络连接</div>';
+  }
+}
 
 // ===== 初始化 =====
 function init() {
