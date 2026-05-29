@@ -1075,33 +1075,34 @@ $('now-cover').addEventListener('click', () => {
 });
 
 // 拖动 + 调整大小逻辑
-let dragMode = null; // 'move' | 'resize'
-let startX, startY, startLeft, startTop, startSize;
+let dragMode = null; // 'move'
+let startX, startY, startLeft, startTop;
 
 cheerToast.addEventListener('mousedown', (e) => {
   clearTimeout(cheerTimer); // 交互时不让它消失
   const rect = cheerToast.getBoundingClientRect();
-  // 判断是否点在右下角 24px 区域内 → 调整大小
-  const nearCorner = (e.clientX > rect.right - 28) && (e.clientY > rect.bottom - 28);
-  dragMode = nearCorner ? 'resize' : 'move';
+  dragMode = 'move';
   startX = e.clientX; startY = e.clientY;
   startLeft = rect.left; startTop = rect.top;
-  startSize = parseInt(getComputedStyle(cheerToast).fontSize) || 56;
   e.preventDefault();
 });
 
+// 滚轮缩放字号(悬停在文字上滚动),范围 20~160px,比拖角更直观
+cheerToast.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  clearTimeout(cheerTimer);
+  const cur = parseInt(getComputedStyle(cheerToast).fontSize) || 56;
+  const next = Math.max(20, Math.min(160, cur + (e.deltaY < 0 ? 4 : -4)));
+  cheerToast.style.fontSize = next + 'px';
+  saveCheerPos();
+  cheerTimer = setTimeout(() => cheerToast.classList.remove('show'), 10000);
+}, { passive: false });
+
 document.addEventListener('mousemove', (e) => {
   if (!dragMode) return;
-  if (dragMode === 'move') {
-    cheerToast.style.left = (startLeft + e.clientX - startX) + 'px';
-    cheerToast.style.top = (startTop + e.clientY - startY) + 'px';
-    cheerToast.style.right = 'auto';
-  } else if (dragMode === 'resize') {
-    // 拖右下角:向右下增大字号,范围 20~160px
-    const delta = (e.clientX - startX + e.clientY - startY) / 2;
-    const newSize = Math.max(20, Math.min(160, startSize + delta * 0.4));
-    cheerToast.style.fontSize = newSize + 'px';
-  }
+  cheerToast.style.left = (startLeft + e.clientX - startX) + 'px';
+  cheerToast.style.top = (startTop + e.clientY - startY) + 'px';
+  cheerToast.style.right = 'auto';
 });
 
 document.addEventListener('mouseup', () => {
