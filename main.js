@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, net, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const iconv = require('iconv-lite');
 const jsmediatags = require('jsmediatags');
 
 let mainWindow;
+let tray = null;
 
 const AUDIO_EXTS = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'];
 
@@ -24,6 +25,42 @@ function createWindow() {
     }
   });
   mainWindow.loadFile('index.html');
+
+  // 阻止窗口真正关闭,改为隐藏到托盘
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+}
+
+// 创建系统托盘图标
+function createTray() {
+  // 使用 logo.jpg 作为托盘图标,缩放到 16x16
+  const iconPath = path.join(__dirname, 'assets', 'logo.jpg');
+  let icon;
+  try {
+    icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  } catch (e) {
+    console.error('托盘图标加载失败:', e);
+    return; // 图标加载失败则不创建托盘
+  }
+
+  tray = new Tray(icon);
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => { mainWindow.show(); } },
+    { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
+  ]);
+
+  tray.setToolTip('浩哥的Music');
+  tray.setContextMenu(contextMenu);
+
+  // 双击托盘图标显示窗口
+  tray.on('double-click', () => {
+    mainWindow.show();
+  });
 }
 
 // ---- Window controls ----
@@ -32,7 +69,7 @@ ipcMain.on('win-maximize', () => {
   if (!mainWindow) return;
   mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
 });
-ipcMain.on('win-close', () => mainWindow && mainWindow.close());
+ipcMain.on('win-close', () => mainWindow && mainWindow.hide()); // 改为隐藏而非关闭
 
 // ---- File pickers ----
 ipcMain.handle('pick-files', async () => {
@@ -269,6 +306,13 @@ ipcMain.handle('load-lrc', async (_e, musicPath) => {
   return null;
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
+});
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-app.on('window-all-closed', () => app.quit());
+// 窗口关闭(隐藏)后不退出应用,保持托盘运行;真正退出走托盘菜单"退出"
+app.on('window-all-closed', () => {
+  // 不调用 app.quit(),让应用常驻托盘
+});
+app.on('before-quit', () => { app.isQuitting = true; });
