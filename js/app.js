@@ -1271,6 +1271,12 @@ async function maybeTranslateLyrics(path, data) {
 
 // 在线歌词搜索(QQ 音乐 API,无需 key)
 async function searchOnlineLyrics(title, artist) {
+  // 检查是否有可用的音源插件
+  if (!currentSource) {
+    console.warn('无可用音源插件，跳过在线歌词搜索');
+    return null;
+  }
+
   // 仅在有歌手时才用缓存:否则两首同名无歌手的歌会共用缓存键而串词
   const cacheKey = artist ? `lrc_${title}_${artist}` : null;
   if (cacheKey) {
