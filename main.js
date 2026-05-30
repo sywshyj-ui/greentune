@@ -1,15 +1,192 @@
-const { app, BrowserWindow, ipcMain, dialog, net, Tray, Menu, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, net, Tray, Menu, nativeImage, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const iconv = require('iconv-lite');
 const jsmediatags = require('jsmediatags');
 const https = require('https');
 const http = require('http');
+const vm = require('vm');
+
+// 插件运行时依赖
+const axios = require('axios');
+const cheerio = require('cheerio');
+const CryptoJS = require('crypto-js');
+const dayjs = require('dayjs');
+const he = require('he');
+const bigInt = require('big-integer');
+const qs = require('qs');
+const FormData = require('form-data');
+const { createClient } = require('webdav');
 
 let mainWindow;
+let miniWindow = null;
 let tray = null;
 
 const AUDIO_EXTS = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'];
+
+// ===== 插件运行时 =====
+class PluginRuntime {
+  constructor() {
+    this.loadedPlugins = new Map(); // id -> {code, exports, enabled, platform, version}
+    this.headerMap = new Map();     // url -> headers (for audio playback)
+    this.pluginMetaPath = path.join(app.getPath('userData'), 'plugins.json');
+  }
+
+  // 创建插件沙箱环境
+  createSandbox() {
+    const moduleCache = {};
+    const customRequire = (moduleName) => {
+      if (moduleCache[moduleName]) return moduleCache[moduleName];
+
+      const modules = {
+        'axios': axios,
+        'cheerio': cheerio,
+        'crypto-js': CryptoJS,
+        'dayjs': dayjs,
+        'he': he,
+        'big-integer': bigInt,
+        'qs': qs,
+        'form-data': FormData,
+        'webdav': { createClient }
+      };
+
+      if (modules[moduleName]) {
+        moduleCache[moduleName] = modules[moduleName];
+        return modules[moduleName];
+      }
+      throw new Error(`Module not found: ${moduleName}`);
+    };
+
+    return {
+      require: customRequire,
+      module: { exports: {} },
+      exports: {},
+      console: console,
+      setTimeout, clearTimeout, setInterval, clearInterval,
+      Buffer, URL, URLSearchParams,
+      process: { env: {}, platform: process.platform, version: process.version },
+      // MusicFree 宿主注入的全局 env(用户变量等),提供空实现以兼容依赖它的插件
+      env: {
+        getUserVariables: () => ({}),
+        os: 'electron',
+        appVersion: '1.0.0',
+        lang: 'zh-CN'
+      }
+    };
+  }
+
+  // 加载插件代码
+  loadPlugin(id, code) {
+    try {
+      const sandbox = this.createSandbox();
+      const script = new vm.Script(code, { filename: `${id}.js` });
+      const context = vm.createContext(sandbox);
+
+      script.runInContext(context, { timeout: 5000 });
+
+      const pluginExports = sandbox.module.exports;
+
+      // 验证必需字段
+      if (!pluginExports.platform || !pluginExports.version) {
+        throw new Error('插件缺少 platform 或 version 字段');
+      }
+
+      this.loadedPlugins.set(id, {
+        code,
+        exports: pluginExports,
+        enabled: true,
+        platform: pluginExports.platform,
+        version: pluginExports.version
+      });
+
+      console.log(`插件加载成功: ${pluginExports.platform} v${pluginExports.version}`);
+      return { ok: true, platform: pluginExports.platform };
+    } catch (e) {
+      console.error(`插件加载失败 (${id}):`, e);
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // 调用插件方法
+  async callPluginMethod(id, method, ...args) {
+    const plugin = this.loadedPlugins.get(id);
+    if (!plugin || !plugin.enabled) {
+      throw new Error(`插件 ${id} 不存在或未启用`);
+    }
+
+    const fn = plugin.exports[method];
+    if (typeof fn !== 'function') {
+      throw new Error(`插件 ${id} 没有 ${method} 方法`);
+    }
+
+    return await fn(...args);
+  }
+
+  // 注册播放 URL 的 headers（供 session.webRequest 使用）
+  registerHeaders(url, headers) {
+    if (headers && Object.keys(headers).length > 0) {
+      this.headerMap.set(url, headers);
+      // 5分钟后自动清理
+      setTimeout(() => this.headerMap.delete(url), 5 * 60 * 1000);
+    }
+  }
+
+  getHeaders(url) {
+    return this.headerMap.get(url) || null;
+  }
+
+  // 保存插件元数据
+  savePluginMeta(id, meta) {
+    let allMeta = {};
+    try {
+      if (fs.existsSync(this.pluginMetaPath)) {
+        allMeta = JSON.parse(fs.readFileSync(this.pluginMetaPath, 'utf8'));
+      }
+    } catch (e) {
+      console.error('读取插件元数据失败:', e);
+    }
+    allMeta[id] = meta;
+    fs.writeFileSync(this.pluginMetaPath, JSON.stringify(allMeta, null, 2));
+  }
+
+  deletePluginMeta(id) {
+    let allMeta = {};
+    try {
+      if (fs.existsSync(this.pluginMetaPath)) {
+        allMeta = JSON.parse(fs.readFileSync(this.pluginMetaPath, 'utf8'));
+      }
+    } catch (e) {
+      return;
+    }
+    delete allMeta[id];
+    fs.writeFileSync(this.pluginMetaPath, JSON.stringify(allMeta, null, 2));
+  }
+
+  // 启动时恢复插件（异步版本，不阻塞窗口创建）
+  async restorePlugins() {
+    try {
+      if (!fs.existsSync(this.pluginMetaPath)) return;
+      const allMeta = JSON.parse(await fs.promises.readFile(this.pluginMetaPath, 'utf8'));
+
+      for (const [id, meta] of Object.entries(allMeta)) {
+        let code = null;
+        if (meta.filePath && fs.existsSync(meta.filePath)) {
+          code = await fs.promises.readFile(meta.filePath, 'utf8');
+        } else if (meta.code) {
+          code = meta.code;
+        }
+
+        if (code) {
+          this.loadPlugin(id, code);
+        }
+      }
+    } catch (e) {
+      console.error('恢复插件失败:', e);
+    }
+  }
+}
+
+const pluginRuntime = new PluginRuntime();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -66,7 +243,14 @@ function createTray() {
   tray = new Tray(icon);
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: '显示主窗口', click: () => { mainWindow.show(); } },
+    { label: '显示主窗口', click: () => {
+      // 如果mini窗口打开，先关闭它再显示主窗口
+      if (miniWindow && !miniWindow.isDestroyed()) {
+        miniWindow.close();
+        miniWindow = null;
+      }
+      mainWindow.show();
+    } },
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
   ]);
 
@@ -75,8 +259,38 @@ function createTray() {
 
   // 双击托盘图标显示窗口
   tray.on('double-click', () => {
+    // 如果mini窗口打开，先关闭它再显示主窗口
+    if (miniWindow && !miniWindow.isDestroyed()) {
+      miniWindow.close();
+      miniWindow = null;
+    }
     mainWindow.show();
   });
+}
+
+// 创建迷你播放器悬浮小窗
+function createMiniWindow() {
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    miniWindow.show();
+    return;
+  }
+  miniWindow = new BrowserWindow({
+    width: 320,
+    height: 150,
+    frame: false,
+    resizable: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  miniWindow.loadFile('mini.html');
+  miniWindow.on('closed', () => { miniWindow = null; });
 }
 
 // ---- Window controls ----
@@ -86,6 +300,30 @@ ipcMain.on('win-maximize', () => {
   mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
 });
 ipcMain.on('win-close', () => mainWindow && mainWindow.hide()); // 改为隐藏而非关闭
+
+// ---- 迷你播放器 ----
+// 打开 mini：创建小窗 + 隐藏主窗
+ipcMain.on('mini:open', () => {
+  createMiniWindow();
+  if (mainWindow) mainWindow.hide();
+});
+// 关闭 mini：关掉小窗 + 显示主窗
+ipcMain.on('mini:close', () => {
+  if (miniWindow && !miniWindow.isDestroyed()) miniWindow.close();
+  if (mainWindow) mainWindow.show();
+});
+// 小窗 → 主窗：转发播放命令(toggle/prev/next/seek/ready)
+ipcMain.on('mini:command', (_e, cmd, payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('mini:command', cmd, payload);
+  }
+});
+// 主窗 → 小窗：转发播放状态
+ipcMain.on('mini:sync', (_e, state) => {
+  if (miniWindow && !miniWindow.isDestroyed()) {
+    miniWindow.webContents.send('mini:sync', state);
+  }
+});
 
 // ---- File pickers ----
 ipcMain.handle('pick-files', async () => {
@@ -507,8 +745,33 @@ app.whenReady().then(() => {
   ]);
   Menu.setApplicationMenu(editMenu);
 
+  // 拦截 audio 请求，注入插件返回的自定义 headers
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = pluginRuntime.getHeaders(details.url);
+    if (headers) {
+      Object.assign(details.requestHeaders, headers);
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
+
+  // 追踪重定向，将原始URL的headers复制到重定向后的URL
+  session.defaultSession.webRequest.onBeforeRedirect((details) => {
+    const headers = pluginRuntime.getHeaders(details.url);
+    if (headers && details.redirectURL) {
+      pluginRuntime.registerHeaders(details.redirectURL, headers);
+    }
+  });
+
+  // 先创建窗口，让用户看到界面
   createWindow();
   createTray();
+
+  // 异步加载插件，不阻塞窗口显示
+  (async () => {
+    await pluginRuntime.restorePlugins();
+    await loadBuiltinPlugins();
+    console.log('所有插件加载完成');
+  })().catch(err => console.error('插件加载失败:', err));
 });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 // 窗口关闭(隐藏)后不退出应用,保持托盘运行;真正退出走托盘菜单"退出"
@@ -516,3 +779,203 @@ app.on('window-all-closed', () => {
   // 不调用 app.quit(),让应用常驻托盘
 });
 app.on('before-quit', () => { app.isQuitting = true; });
+
+// ===== 内置插件 =====
+async function loadBuiltinPlugins() {
+  // 内置 QQ 音乐插件
+  const builtinQQPlugin = `
+const axios = require('axios');
+
+async function httpGet(url, referer) {
+  const res = await axios.get(url, {
+    headers: { 'Referer': referer || '', 'User-Agent': 'Mozilla/5.0' },
+    timeout: 10000
+  });
+  return res.data;
+}
+
+module.exports = {
+  platform: 'QQ音乐',
+  version: '1.0.0',
+  author: '内置',
+  supportedSearchType: ['music'],
+
+  async search(keyword, page, type) {
+    const url = \`https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=\${encodeURIComponent(keyword)}&p=\${page || 1}&n=50&format=json\`;
+    const data = await httpGet(url, 'https://y.qq.com');
+    const list = (data && data.data && data.data.song && data.data.song.list) || [];
+    return {
+      isEnd: list.length < 50,
+      data: list.map((s) => ({
+        id: s.songmid,
+        title: s.songname,
+        artist: (s.singer || []).map((a) => a.name).join(', '),
+        album: s.albumname || 'Unknown',
+        artwork: s.albummid ? \`https://y.qq.com/music/photo_new/T002R300x300M000\${s.albummid}.jpg\` : '',
+        duration: (s.interval || 0) * 1000,
+        platform: 'QQ音乐'
+      }))
+    };
+  },
+
+  async getMediaSource(musicItem, quality) {
+    const data = {
+      req_0: {
+        module: 'vkey.GetVkeyServer',
+        method: 'CgiGetVkey',
+        param: { guid: '10000', songmid: [musicItem.id], songtype: [0], uin: '0', loginflag: 1, platform: '20' }
+      }
+    };
+    const url = \`https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=\${encodeURIComponent(JSON.stringify(data))}\`;
+    const r = await httpGet(url, 'https://y.qq.com');
+    const info = r && r.req_0 && r.req_0.data;
+    if (!info || !info.midurlinfo || !info.midurlinfo[0]) return null;
+    const purl = info.midurlinfo[0].purl;
+    if (!purl) return null;
+    return { url: info.sip[0] + purl };
+  },
+
+  async getLyric(musicItem) {
+    const url = \`https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=\${musicItem.id}&format=json&nobase64=1\`;
+    const data = await httpGet(url, 'https://y.qq.com');
+    return { rawLrc: data && data.lyric ? data.lyric : null };
+  }
+};
+`;
+
+  pluginRuntime.loadPlugin('builtin_qq', builtinQQPlugin);
+
+  // 自动扫描并加载 plugins/ 目录下的内置 .js 插件 (B站/酷狗/网易/酷我/咪咕等) - 异步版本
+  try {
+    const pluginsDir = path.join(__dirname, 'plugins');
+    if (fs.existsSync(pluginsDir)) {
+      const files = await fs.promises.readdir(pluginsDir);
+      for (const file of files) {
+        if (!file.endsWith('.js')) continue;
+        try {
+          const code = await fs.promises.readFile(path.join(pluginsDir, file), 'utf8');
+          const id = 'builtin_' + path.basename(file, '.js');
+          const r = pluginRuntime.loadPlugin(id, code);
+          if (r.ok) console.log(`内置插件已加载: ${file} -> ${r.platform}`);
+          else console.error(`内置插件加载失败 ${file}: ${r.error}`);
+        } catch (e) {
+          console.error(`读取内置插件失败 ${file}:`, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('扫描内置插件目录失败:', e);
+  }
+}
+
+// ===== 插件管理 IPC 接口 =====
+
+// 列出所有插件
+ipcMain.handle('plugin:list', async () => {
+  const list = [];
+  pluginRuntime.loadedPlugins.forEach((plugin, id) => {
+    list.push({
+      id,
+      platform: plugin.platform,
+      version: plugin.version,
+      enabled: plugin.enabled
+    });
+  });
+  return list;
+});
+
+// 从本地文件加载插件
+ipcMain.handle('plugin:load-file', async (_e) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'JavaScript', extensions: ['js'] }]
+  });
+
+  if (result.canceled || !result.filePaths.length) return null;
+
+  const filePath = result.filePaths[0];
+  const code = fs.readFileSync(filePath, 'utf8');
+  const id = 'local_' + path.basename(filePath, '.js') + '_' + Date.now();
+
+  const loadResult = pluginRuntime.loadPlugin(id, code);
+  if (loadResult.ok) {
+    pluginRuntime.savePluginMeta(id, { filePath, platform: loadResult.platform });
+    return { ok: true, id, platform: loadResult.platform };
+  }
+  return loadResult;
+});
+
+// 从 URL 加载插件
+ipcMain.handle('plugin:load-url', async (_e, url) => {
+  try {
+    const response = await axios.get(url, { timeout: 15000 });
+    const code = response.data;
+    const id = 'remote_' + url.split('/').pop().replace('.js', '') + '_' + Date.now();
+
+    const loadResult = pluginRuntime.loadPlugin(id, code);
+    if (loadResult.ok) {
+      pluginRuntime.savePluginMeta(id, { url, code, platform: loadResult.platform });
+      return { ok: true, id, platform: loadResult.platform };
+    }
+    return loadResult;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 启用/禁用插件
+ipcMain.handle('plugin:toggle', async (_e, id, enabled) => {
+  const plugin = pluginRuntime.loadedPlugins.get(id);
+  if (!plugin) return { ok: false, error: '插件不存在' };
+  plugin.enabled = enabled;
+  return { ok: true };
+});
+
+// 删除插件
+ipcMain.handle('plugin:remove', async (_e, id) => {
+  pluginRuntime.loadedPlugins.delete(id);
+  pluginRuntime.deletePluginMeta(id);
+  return { ok: true };
+});
+
+// 统一音源接口：搜索
+ipcMain.handle('source:search', async (_e, sourceId, keyword, page, type) => {
+  try {
+    return await pluginRuntime.callPluginMethod(sourceId, 'search', keyword, page || 1, type || 'music');
+  } catch (e) {
+    console.error(`插件 ${sourceId} 搜索失败:`, e);
+    return { isEnd: true, data: [] };
+  }
+});
+
+// 统一音源接口：获取播放 URL
+ipcMain.handle('source:url', async (_e, sourceId, musicItem, quality) => {
+  try {
+    const result = await pluginRuntime.callPluginMethod(sourceId, 'getMediaSource', musicItem, quality || 'standard');
+
+    // 注册 headers（如果有）
+    if (result && result.url) {
+      const headers = {};
+      if (result.headers) Object.assign(headers, result.headers);
+      if (result.userAgent) headers['User-Agent'] = result.userAgent;
+      pluginRuntime.registerHeaders(result.url, headers);
+      return result.url;
+    }
+    return null;
+  } catch (e) {
+    console.error(`插件 ${sourceId} 获取URL失败:`, e);
+    return null;
+  }
+});
+
+// 统一音源接口：获取歌词
+ipcMain.handle('source:lyric', async (_e, sourceId, musicItem) => {
+  try {
+    const result = await pluginRuntime.callPluginMethod(sourceId, 'getLyric', musicItem);
+    return result && result.rawLrc ? result.rawLrc : null;
+  } catch (e) {
+    console.error(`插件 ${sourceId} 获取歌词失败:`, e);
+    return null;
+  }
+});
+

@@ -26,5 +26,29 @@ contextBridge.exposeInMainWorld('api', {
   // 复制文本到系统剪贴板(交主进程写,最稳妥)
   copyText: (text) => ipcRenderer.invoke('copy-text', text),
   // 取拖拽 File 对象的真实磁盘路径(Electron 推荐方式)
-  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return file.path || ''; } }
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return file.path || ''; } },
+
+  // ===== 插件管理 =====
+  pluginList: () => ipcRenderer.invoke('plugin:list'),
+  pluginLoadFile: () => ipcRenderer.invoke('plugin:load-file'),
+  pluginLoadUrl: (url) => ipcRenderer.invoke('plugin:load-url', url),
+  pluginToggle: (id, enabled) => ipcRenderer.invoke('plugin:toggle', id, enabled),
+  pluginRemove: (id) => ipcRenderer.invoke('plugin:remove', id),
+
+  // ===== 统一音源接口 =====
+  sourceSearch: (sourceId, keyword, page, type) => ipcRenderer.invoke('source:search', sourceId, keyword, page, type),
+  sourceUrl: (sourceId, musicItem, quality) => ipcRenderer.invoke('source:url', sourceId, musicItem, quality),
+  sourceLyric: (sourceId, musicItem) => ipcRenderer.invoke('source:lyric', sourceId, musicItem),
+
+  // ===== 迷你播放器 =====
+  miniOpen: () => ipcRenderer.send('mini:open'),
+  miniClose: () => ipcRenderer.send('mini:close'),
+  // 小窗发命令给主窗
+  miniCommand: (cmd, payload) => ipcRenderer.send('mini:command', cmd, payload),
+  // 主窗推状态给小窗
+  miniSyncState: (state) => ipcRenderer.send('mini:sync', state),
+  // 小窗监听状态推送
+  onMiniSync: (cb) => ipcRenderer.on('mini:sync', (_e, state) => cb(state)),
+  // 主窗监听小窗命令
+  onMiniCommand: (cb) => ipcRenderer.on('mini:command', (_e, cmd, payload) => cb(cmd, payload))
 });

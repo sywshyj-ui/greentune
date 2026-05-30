@@ -29,9 +29,13 @@ let onlineResults = [];                    // 在线搜索结果
 let onlineQuery = '';                      // 当前在线搜索关键词
 let onlinePlaylists = LS.get('onlinePlaylists', []); // 导入的在线歌单 {id,name,source,songs:[{neid,name,artist,album,picUrl,duration}]}
 // 在线歌单播放状态:网易云歌单的歌经 QQ 解析后播放,需独立的队列以支持自动下一首
-let onlinePlaylistMode = false;            // 当前是否在播放“在线歌单”里的歌
+let onlinePlaylistMode = false;            // 当前是否在播放”在线歌单”里的歌
 let onlinePlayList = null;                 // 正在播放的在线歌单 songs 数组
 let onlinePlayIdx = -1;                    // 在该数组中的索引
+
+// 插件系统
+let plugins = [];                          // 所有已加载的插件列表
+let currentSource = LS.get('currentSource', 'builtin_qq'); // 当前选中的音源插件 ID
 
 // Web Audio 频谱
 let audioCtx = null;
@@ -243,7 +247,7 @@ function render() {
   updateSortIndicators();
 }
 
-// 渲染在线搜索/推荐结果(QQ 搜索结果结构:name/artists[]/album.name/duration)
+// 渲染在线搜索/推荐结果(统一音源结构:title/artist/album/artwork/duration)
 function renderOnlineRows(list, genreLabel, emptyHint) {
   const body = $('song-body'), empty = $('empty-state'), table = $('song-table');
   if (!list || !list.length) {
@@ -256,19 +260,21 @@ function renderOnlineRows(list, genreLabel, emptyHint) {
   table.hidden = false;
   empty.hidden = true;
   body.innerHTML = list.map((s, i) => {
-    const playing = currentPath === s.id;
-    return `<div class="st-row ${playing ? 'playing' : ''}" data-online-id="${s.id}">
+    // 确保每首歌都有唯一ID，如果缺失则用索引作为后备
+    const songId = s.id || `fallback_${i}`;
+    const playing = currentPath === songId;
+    return `<div class="st-row ${playing ? 'playing' : ''}" data-online-id="${songId}" data-index="${i}">
       <div class="row-idx"><span class="num">${i + 1}</span><span class="play-mark">▶</span></div>
       <div class="row-main">
-        <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
+        <div class="row-cover">${s.artwork ? `<img src="${s.artwork}" alt="">` : '🎵'}</div>
         <div class="row-text">
-          <span class="row-title">${esc(s.name)}</span>
-          <span class="row-artist">${esc(s.artists.map(a => a.name).join(', '))}</span>
+          <span class="row-title">${esc(s.title)}</span>
+          <span class="row-artist">${esc(s.artist)}</span>
         </div>
       </div>
-      <div class="row-album">${esc(s.album.name)}</div>
+      <div class="row-album">${esc(s.album || '')}</div>
       <div class="row-genre">${genreLabel}</div>
-      <div class="row-dur">${fmt(s.duration / 1000)}</div>
+      <div class="row-dur">${fmt((s.duration || 0) / 1000)}</div>
     </div>`;
   }).join('');
   body.querySelectorAll('.st-row').forEach((row) => {
@@ -300,17 +306,16 @@ function showOnlineResultMenu(x, y, songId) {
   });
   menu.querySelector('[data-action="copy"]').addEventListener('click', () => {
     closeContextMenu();
-    copyText(song.name);
+    copyText(song.title);
   });
 }
 
-// 下载一首在线歌曲:先用 QQ 解析试听地址,再交主进程弹保存框写盘
+// 下载一首在线歌曲:先用当前音源解析试听地址,再交主进程弹保存框写盘
 async function downloadOnlineSong(song) {
-  const artist = song.artists.map((a) => a.name).join(', ');
   try {
-    const playUrl = await window.api.qqUrl(song.id);
+    const playUrl = await window.api.sourceUrl(currentSource, song, 'standard');
     if (!playUrl) { alert('该歌曲为付费/会员歌曲,无法下载'); return; }
-    const name = `${song.name} - ${artist}`;
+    const name = `${song.title} - ${song.artist}`;
     const r = await window.api.downloadFile(playUrl, name);
     if (!r) return; // 用户在保存对话框取消
     if (r.ok) alert('已下载到:\n' + r.path);
@@ -336,12 +341,16 @@ function renderOnlinePlaylistRows(opl) {
   empty.hidden = true;
   body.innerHTML = songs.map((s, i) => {
     const playing = onlinePlaylistMode && onlinePlayList === opl.songs && onlinePlayIdx === i;
+    // 兼容新旧字段名：优先用新字段(title/artwork)，回退到旧字段(name/picUrl)
+    const title = s.title || s.name || '未知歌曲';
+    const cover = s.artwork || s.picUrl;
+    const coverUrl = cover ? (cover.includes('?') ? cover : `${cover}?param=40y40`) : null;
     return `<div class="st-row ${playing ? 'playing' : ''}" data-opl-idx="${i}">
       <div class="row-idx"><span class="num">${i + 1}</span><span class="play-mark">▶</span></div>
       <div class="row-main">
-        <div class="row-cover">${s.picUrl ? `<img src="${s.picUrl}?param=40y40" alt="">` : '🎵'}</div>
+        <div class="row-cover">${coverUrl ? `<img src="${coverUrl}" alt="">` : '🎵'}</div>
         <div class="row-text">
-          <span class="row-title">${esc(s.name)}</span>
+          <span class="row-title">${esc(title)}</span>
           <span class="row-artist">${esc(s.artist)}</span>
         </div>
       </div>
@@ -463,10 +472,10 @@ async function downloadOnlineSongs(plId, idxs) {
     try {
       const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
       const q = (meta.name + ' ' + realArtist).trim();
-      const results = await window.api.qqSearch(q, 1);
-      const song = results && results[0];
+      const result = await window.api.sourceSearch(currentSource, q, 1, 'music');
+      const song = result.data && result.data[0];
       if (!song || !song.id) { fail++; continue; }
-      const playUrl = await window.api.qqUrl(song.id);
+      const playUrl = await window.api.sourceUrl(currentSource, song, 'standard');
       if (!playUrl) { fail++; continue; } // 付费/会员歌曲
       const r = await window.api.downloadToDir(playUrl, dir, `${meta.name} - ${meta.artist}`);
       if (r && r.ok) ok++; else fail++;
@@ -489,10 +498,10 @@ async function downloadPlaylistSong(meta) {
   try {
     const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
     const q = (meta.name + ' ' + realArtist).trim();
-    const results = await window.api.qqSearch(q, 1);
-    const song = results && results[0];
+    const result = await window.api.sourceSearch(currentSource, q, 1, 'music');
+    const song = result.data && result.data[0];
     if (!song || !song.id) { alert('未找到可下载资源:' + meta.name); return; }
-    const playUrl = await window.api.qqUrl(song.id);
+    const playUrl = await window.api.sourceUrl(currentSource, song, 'standard');
     if (!playUrl) { alert('「' + meta.name + '」为付费/会员歌曲,无法下载'); return; }
     const r = await window.api.downloadFile(playUrl, `${meta.name} - ${meta.artist}`);
     if (!r) return; // 用户取消保存
@@ -703,15 +712,15 @@ async function completeSongInfo(path) {
   const s = byPath(path);
   if (!s) return;
   try {
-    const results = await window.api.qqSearch(s.title + (s.artist ? ' ' + s.artist : ''), 1);
-    const song = results && results[0];
+    const result = await window.api.sourceSearch(currentSource, s.title + (s.artist ? ' ' + s.artist : ''), 1, 'music');
+    const song = result.data && result.data[0];
     if (!song) { alert('未找到匹配的在线歌曲信息'); return; }
 
     // 更新信息
-    s.artist = (song.artists || []).map(a => a.name).join(', ') || s.artist;
-    s.album = (song.album && song.album.name) || s.album;
-    if (song.picUrl && !coverCache[path]) {
-      coverCache[path] = song.picUrl;
+    s.artist = song.artist || s.artist;
+    s.album = song.album || s.album;
+    if (song.artwork && !coverCache[path]) {
+      coverCache[path] = song.artwork;
     }
     saveLib();
     render();
@@ -1270,14 +1279,14 @@ async function searchOnlineLyrics(title, artist) {
   }
 
   try {
-    // 通过 QQ 音乐搜索歌曲(歌手可为空)
+    // 通过当前音源搜索歌曲(歌手可为空)
     const query = (title + ' ' + (artist || '')).trim();
-    const results = await window.api.qqSearch(query, 1);
-    const song = results && results[0];
+    const result = await window.api.sourceSearch(currentSource, query, 1, 'music');
+    const song = result.data && result.data[0];
     if (!song || !song.id) return null;
 
-    // 获取歌词(QQ songmid)
-    const raw = await window.api.qqLyric(song.id);
+    // 获取歌词
+    const raw = await window.api.sourceLyric(currentSource, song);
     if (!raw) return null;
 
     // 解析 LRC
@@ -1361,10 +1370,10 @@ async function importSongs(songs) {
 async function fetchOnlineCover(filePath, title, artist) {
   if (!title) return;
   try {
-    const results = await window.api.qqSearch(title + (artist ? ' ' + artist : ''), 1);
-    const song = results && results[0];
-    if (song && song.picUrl) {
-      coverCache[filePath] = song.picUrl;
+    const result = await window.api.sourceSearch(currentSource, title + (artist ? ' ' + artist : ''), 1, 'music');
+    const song = result.data && result.data[0];
+    if (song && song.artwork) {
+      coverCache[filePath] = song.artwork;
       // 局部更新封面显示
       const coverEl = document.querySelector(`.st-row[data-path="${CSS.escape(filePath)}"] .row-cover`);
       if (coverEl) coverEl.innerHTML = `<img src="${coverCache[filePath]}" alt="">`;
@@ -1436,14 +1445,18 @@ const volBar = setupBar('vol-bar', 'vol-fill', 'vol-knob', (r) => {
 });
 
 // ===== audio 事件 =====
-audio.addEventListener('play', () => { setPlayIcon(true); $('now-cover').classList.remove('paused'); });
-audio.addEventListener('pause', () => { setPlayIcon(false); $('now-cover').classList.add('paused'); });
+audio.addEventListener('play', () => { setPlayIcon(true); $('now-cover').classList.remove('paused'); pushMiniState(); });
+audio.addEventListener('pause', () => { setPlayIcon(false); $('now-cover').classList.add('paused'); pushMiniState(); });
 audio.addEventListener('ended', onEnded);
 audio.addEventListener('loadedmetadata', () => {
   $('dur-time').textContent = fmt(audio.duration);
   const s = byPath(currentPath);
   if (s && (!s.duration || isNaN(s.duration))) { s.duration = audio.duration; saveLib(); }
+  pushMiniState();
 });
+
+// 节流：timeupdate 每秒只推送一次状态给 mini 窗口
+let lastMiniPush = 0;
 audio.addEventListener('timeupdate', () => {
   if (!isSeeking && audio.duration) {
     const r = audio.currentTime / audio.duration;
@@ -1451,6 +1464,42 @@ audio.addEventListener('timeupdate', () => {
     $('cur-time').textContent = fmt(audio.currentTime);
   }
   syncLyrics(audio.currentTime);
+
+  // 节流：每秒最多推送一次
+  const now = Date.now();
+  if (now - lastMiniPush > 1000) {
+    pushMiniState();
+    lastMiniPush = now;
+  }
+});
+
+// ===== 迷你播放器状态同步 =====
+// 取当前"现在播放"状态推给小窗(从 DOM 读已渲染好的标题/歌手/封面,兼容本地与在线)
+function pushMiniState() {
+  const coverImg = $('now-cover').querySelector('img');
+  const curLyric = (lrc && lrcIdx >= 0 && lrc[lrcIdx]) ? lrc[lrcIdx].text : '';
+  window.api.miniSyncState({
+    title: $('now-title').textContent,
+    artist: $('now-artist').textContent,
+    cover: coverImg ? coverImg.getAttribute('src') : '',
+    playing: !audio.paused,
+    currentTime: audio.currentTime || 0,
+    duration: audio.duration || 0,
+    lyric: curLyric
+  });
+}
+
+// 监听小窗发来的命令
+window.api.onMiniCommand((cmd, payload) => {
+  switch (cmd) {
+    case 'toggle': togglePlay(); break;
+    case 'next': playNext(); break;
+    case 'prev': playPrev(); break;
+    case 'seek':
+      if (audio.duration) audio.currentTime = payload * audio.duration;
+      break;
+    case 'ready': pushMiniState(); break; // 小窗就绪,立即推一次
+  }
 });
 
 // ===== 控件绑定 =====
@@ -1760,6 +1809,7 @@ async function doImportPlaylist() {
 }
 
 // 窗口控制
+$('win-mini').addEventListener('click', () => window.api.miniOpen());
 $('win-min').addEventListener('click', () => window.api.minimize());
 $('win-max').addEventListener('click', () => window.api.maximize());
 $('win-close').addEventListener('click', () => window.api.close());
@@ -1859,11 +1909,22 @@ $('eq-close').addEventListener('click', () => { $('eq-modal').hidden = true; });
 // ===== 在线音乐搜索与试听 =====
 async function searchOnlineMusic(keyword) {
   if (!keyword || !keyword.trim()) { onlineResults = []; render(); return; }
+  if (!currentSource) {
+    alert('请先加载音源插件（按 Ctrl+P 打开插件管理）');
+    return;
+  }
   onlineQuery = keyword;
   const body = $('song-body');
   body.innerHTML = '<div class="online-loading">正在搜索在线音乐…</div>';
+
+  if (!currentSource) {
+    body.innerHTML = '<div class="online-loading">请先在插件管理中启用至少一个音源</div>';
+    return;
+  }
+
   try {
-    onlineResults = await window.api.qqSearch(keyword, 50);
+    const result = await window.api.sourceSearch(currentSource, keyword, 1, 'music');
+    onlineResults = result.data || [];
     render();
   } catch (e) {
     console.error('在线搜索失败:', e);
@@ -1873,26 +1934,33 @@ async function searchOnlineMusic(keyword) {
 }
 
 async function playOnline(songId) {
-  const song = onlineResults.find((s) => s.id == songId);
+  // 优先用 id 匹配，如果是 fallback_N 格式则用索引匹配
+  let song;
+  if (songId.startsWith('fallback_')) {
+    const index = parseInt(songId.replace('fallback_', ''), 10);
+    song = onlineResults[index];
+  } else {
+    song = onlineResults.find((s) => s.id == songId);
+  }
   if (!song) return;
   onlinePlaylistMode = false; // 普通在线搜索播放,非歌单连播
   try {
-    const playUrl = await window.api.qqUrl(songId);
+    const playUrl = await window.api.sourceUrl(currentSource, song, 'standard');
     if (!playUrl) { alert('该歌曲为付费/会员歌曲,无法试听'); return; }
     currentPath = String(songId);
     audio.src = playUrl;
     audio.play().catch((e) => console.error('播放失败', e));
-    // 注意:不对在线流接入 Web Audio 图。QQ 音频是跨域资源,且 audio 未设
+    // 注意:不对在线流接入 Web Audio 图。在线音频是跨域资源,且 audio 未设
     // crossOrigin,经 createMediaElementSource 会被判为 tainted 而输出静音。
     // 因此在线试听跳过均衡器/频谱(本地播放不受影响)。
-    $('now-title').textContent = song.name;
-    $('now-artist').textContent = song.artists.map((a) => a.name).join(', ');
+    $('now-title').textContent = song.title;
+    $('now-artist').textContent = song.artist;
     const coverEl = $('now-cover');
-    coverEl.innerHTML = song.picUrl ? `<img src="${song.picUrl}" alt="">` : '<img src="assets/logo.jpg" alt="">';
+    coverEl.innerHTML = song.artwork ? `<img src="${song.artwork}" alt="">` : '<img src="assets/logo.jpg" alt="">';
     coverEl.classList.add('rotating');
     $('like-btn').classList.remove('liked');
     $('like-btn').textContent = '♡';
-    loadOnlineLyrics(songId);
+    loadOnlineLyrics(song);
     render();
   } catch (e) {
     console.error('播放失败:', e);
@@ -1910,7 +1978,7 @@ async function playFromOnlinePlaylist(plId, idx) {
   await resolveOnlineAndPlay(pl.songs[idx]);
 }
 
-// 用 QQ 音乐按歌名+歌手搜一首并播放;界面信息仍用网易云的元数据(更贴合用户歌单)
+// 用当前音源按歌名+歌手搜一首并播放;界面信息仍用网易云的元数据(更贴合用户歌单)
 async function resolveOnlineAndPlay(meta) {
   const titleEl = $('now-title'), artistEl = $('now-artist'), coverEl = $('now-cover');
   titleEl.textContent = meta.name;
@@ -1918,10 +1986,10 @@ async function resolveOnlineAndPlay(meta) {
   try {
     const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
     const q = (meta.name + ' ' + realArtist).trim();
-    const results = await window.api.qqSearch(q, 1);
-    const song = results && results[0];
+    const result = await window.api.sourceSearch(currentSource, q, 1, 'music');
+    const song = result.data && result.data[0];
     if (!song || !song.id) { artistEl.textContent = meta.artist; alert('未找到可播放资源:' + meta.name); return; }
-    const playUrl = await window.api.qqUrl(song.id);
+    const playUrl = await window.api.sourceUrl(currentSource, song, 'standard');
     if (!playUrl) { artistEl.textContent = meta.artist; alert('「' + meta.name + '」为付费/会员歌曲,无法试听'); return; }
     currentPath = String(song.id);
     audio.src = playUrl;
@@ -1929,11 +1997,11 @@ async function resolveOnlineAndPlay(meta) {
     titleEl.textContent = meta.name;
     artistEl.textContent = meta.artist;
     coverEl.innerHTML = meta.picUrl ? `<img src="${meta.picUrl}?param=120y120" alt="">`
-      : (song.picUrl ? `<img src="${song.picUrl}" alt="">` : '<img src="assets/logo.jpg" alt="">');
+      : (song.artwork ? `<img src="${song.artwork}" alt="">` : '<img src="assets/logo.jpg" alt="">');
     coverEl.classList.add('rotating');
     $('like-btn').classList.remove('liked');
     $('like-btn').textContent = '♡';
-    loadOnlineLyrics(song.id);
+    loadOnlineLyrics(song);
     render();
   } catch (e) {
     console.error('在线歌单播放失败:', e);
@@ -1942,13 +2010,14 @@ async function resolveOnlineAndPlay(meta) {
   }
 }
 
-// 在线歌词获取
-async function loadOnlineLyrics(songId) {
+// 在线歌词获取(传入 musicItem 对象)
+async function loadOnlineLyrics(song) {
   lrc = null; lrcIdx = -1;
+  const songId = song.id;
   const box = $('lp-lyrics');
   box.innerHTML = '<p class="lp-placeholder">正在加载歌词…</p>';
   try {
-    const raw = await window.api.qqLyric(songId);
+    const raw = await window.api.sourceLyric(currentSource, song);
     if (path_changed(songId)) return;
     if (!raw) { box.innerHTML = '<p class="lp-placeholder">暂无歌词</p>'; return; }
     lrc = parseLrc(raw);
@@ -2005,9 +2074,10 @@ async function loadRecommendations() {
   try {
     // 从最常听的几个艺术家里随机挑一个搜索,「换一批」时结果会变化
     const keyword = topArtists[Math.floor(Math.random() * topArtists.length)];
-    let results = await window.api.qqSearch(keyword, 30);
+    const result = await window.api.sourceSearch(currentSource, keyword, 1, 'music');
+    let results = result.data || [];
     // 打乱顺序,让每次"换一批"更有新鲜感
-    results = (results || []).sort(() => Math.random() - 0.5);
+    results = results.sort(() => Math.random() - 0.5);
     onlineResults = results;
     render();
   } catch (e) {
@@ -2059,5 +2129,135 @@ function init() {
   render();
   repairGarbledTitles(); // 自动修复旧的乱码标题
   drawVisualizer();      // 启动频谱循环,纯在线播放时音柱也能跳
+  loadPlugins();         // 加载插件列表
 }
 init();
+
+// ===== 插件管理 =====
+
+// 加载插件列表
+async function loadPlugins() {
+  plugins = await window.api.pluginList();
+
+  // 如果当前选中的音源不存在或未启用，自动选择第一个启用的插件
+  const current = plugins.find(p => p.id === currentSource && p.enabled);
+  if (!current) {
+    const enabled = plugins.find(p => p.enabled);
+    if (enabled) {
+      currentSource = enabled.id;
+      LS.set('currentSource', currentSource);
+    } else {
+      // 所有插件都被禁用，清空 currentSource 并提示用户
+      currentSource = null;
+      LS.set('currentSource', '');
+      console.warn('所有插件都已禁用，请至少启用一个音源插件');
+    }
+  }
+}
+
+// 渲染插件列表
+function renderPluginList() {
+  const list = $('plugin-list');
+  if (!plugins.length) {
+    list.innerHTML = '<p class="empty-hint">暂无插件，点击上方按钮加载</p>';
+    return;
+  }
+
+  list.innerHTML = plugins.map(p => `
+    <div class="plugin-item ${p.enabled ? '' : 'disabled'}">
+      <div class="plugin-info">
+        <span class="plugin-name">${esc(p.platform)}</span>
+        <span class="plugin-version">v${esc(p.version)}</span>
+      </div>
+      <div class="plugin-controls">
+        <label class="switch">
+          <input type="checkbox" ${p.enabled ? 'checked' : ''}
+                 data-plugin-id="${p.id}">
+          <span class="slider"></span>
+        </label>
+        <button data-plugin-id="${p.id}" data-action="remove">🗑</button>
+      </div>
+    </div>
+  `).join('');
+
+  // 绑定事件
+  list.querySelectorAll('.switch input').forEach(input => {
+    input.addEventListener('change', () => togglePlugin(input.dataset.pluginId, input.checked));
+  });
+
+  list.querySelectorAll('button[data-action="remove"]').forEach(btn => {
+    btn.addEventListener('click', () => removePlugin(btn.dataset.pluginId));
+  });
+}
+
+// 打开插件管理弹窗
+function openPluginModal() {
+  $('plugin-modal').hidden = false;
+  renderPluginList();
+}
+
+// 关闭插件管理弹窗
+$('plugin-close').addEventListener('click', () => {
+  $('plugin-modal').hidden = true;
+});
+
+// 从文件加载插件
+$('plugin-load-file').addEventListener('click', async () => {
+  const result = await window.api.pluginLoadFile();
+  if (result && result.ok) {
+    toast(`插件「${result.platform}」加载成功`);
+    await loadPlugins();
+    renderPluginList();
+  } else if (result) {
+    alert(`加载失败: ${result.error}`);
+  }
+});
+
+// 从 URL 加载插件
+$('plugin-load-url').addEventListener('click', async () => {
+  const url = prompt('请输入插件 URL:\n\n例如: https://example.com/plugin.js');
+  if (!url) return;
+
+  toast('正在下载插件...');
+  const result = await window.api.pluginLoadUrl(url);
+  if (result.ok) {
+    toast(`插件「${result.platform}」加载成功`);
+    await loadPlugins();
+    renderPluginList();
+  } else {
+    alert(`加载失败: ${result.error}`);
+  }
+});
+
+// 切换插件启用状态
+async function togglePlugin(id, enabled) {
+  await window.api.pluginToggle(id, enabled);
+  await loadPlugins();
+  renderPluginList();
+}
+
+// 删除插件
+async function removePlugin(id) {
+  if (!confirm('确定删除该插件?')) return;
+  await window.api.pluginRemove(id);
+  await loadPlugins();
+  renderPluginList();
+}
+
+// 侧边栏"插件"导航项打开插件管理弹窗
+const navPluginBtn = $('nav-plugin');
+if (navPluginBtn) navPluginBtn.addEventListener('click', openPluginModal);
+
+// 快捷键 Ctrl+P 也能打开插件管理
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+    e.preventDefault();
+    openPluginModal();
+  }
+});
+
+// 点击弹窗遮罩空白处关闭
+$('plugin-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'plugin-modal') $('plugin-modal').hidden = true;
+});
+

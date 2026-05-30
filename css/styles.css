@@ -659,3 +659,140 @@ body {
   max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ===== 插件管理界面 ===== */
+.plugin-box {
+  max-width: 600px;
+  width: 90vw;
+}
+
+.plugin-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.plugin-actions button {
+  flex: 1;
+}
+
+.plugin-list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.plugin-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.2s;
+}
+
+.plugin-item:last-child {
+  border-bottom: none;
+}
+
+.plugin-item:hover {
+  background: var(--bg-elevated);
+}
+
+.plugin-item.disabled {
+  opacity: 0.5;
+}
+
+.plugin-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plugin-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.plugin-version {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.plugin-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.plugin-controls button {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.plugin-controls button:hover {
+  background: var(--bg-elevated);
+}
+
+/* 开关按钮 */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border);
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--green);
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+.empty-hint {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 20px;
+  font-size: 14px;
+}
+#mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

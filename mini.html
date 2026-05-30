@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>迷你播放器</title>
+  <style>
+    :root {
+      --green: #1db954;
+      --bg: #181818;
+      --bg-elevated: #282828;
+      --text: #fff;
+      --text-muted: #b3b3b3;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: transparent;
+      user-select: none;
+    }
+    .mini {
+      width: 100%; height: 100%;
+      background: linear-gradient(135deg, #1f1f1f, #2a2a2a);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+    /* 顶部：封面 + 信息 + 窗口按钮 */
+    .mini-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 10px 6px;
+    }
+    .mini-cover {
+      width: 48px; height: 48px;
+      border-radius: 8px;
+      overflow: hidden;
+      flex-shrink: 0;
+      background: var(--bg-elevated);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .mini-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .mini-cover .ph { font-size: 22px; }
+    .mini-info {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .mini-title {
+      font-size: 13px; font-weight: 700; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .mini-artist {
+      font-size: 11px; color: var(--text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .mini-winbtns {
+      display: flex; gap: 2px;
+      -webkit-app-region: no-drag;
+    }
+    .mini-winbtns button {
+      width: 22px; height: 22px;
+      border: none; background: transparent;
+      color: var(--text-muted); cursor: pointer;
+      border-radius: 5px; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .mini-winbtns button:hover { background: rgba(255,255,255,0.12); color: var(--text); }
+    /* 当前歌词 */
+    .mini-lyric {
+      padding: 0 12px;
+      font-size: 11px; color: var(--green);
+      text-align: center;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      height: 16px; line-height: 16px;
+    }
+    /* 进度条 */
+    .mini-progress-wrap {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px 0;
+      -webkit-app-region: no-drag;
+    }
+    .mini-time { font-size: 9px; color: var(--text-muted); width: 28px; flex-shrink: 0; }
+    .mini-time.right { text-align: right; }
+    .mini-progress {
+      flex: 1; height: 4px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 2px; cursor: pointer;
+      position: relative;
+    }
+    .mini-progress-fill {
+      position: absolute; left: 0; top: 0; height: 100%;
+      background: var(--green); border-radius: 2px; width: 0%;
+    }
+    /* 控制按钮 */
+    .mini-controls {
+      display: flex; align-items: center; justify-content: center;
+      gap: 18px;
+      padding: 6px 0 10px;
+      -webkit-app-region: no-drag;
+    }
+    .mini-controls button {
+      border: none; background: transparent; cursor: pointer;
+      color: var(--text); display: flex; align-items: center; justify-content: center;
+      border-radius: 50%; transition: transform 0.1s;
+    }
+    .mini-controls button:active { transform: scale(0.9); }
+    .mini-controls .side-btn { width: 30px; height: 30px; color: var(--text-muted); }
+    .mini-controls .side-btn:hover { color: var(--text); }
+    .mini-controls .play-btn {
+      width: 38px; height: 38px;
+      background: var(--green); color: #06210f;
+    }
+    .mini-controls .play-btn:hover { transform: scale(1.06); }
+    svg { display: block; }
+  </style>
+</head>
+<body>
+  <div class="mini">
+    <div class="mini-top">
+      <div class="mini-cover" id="m-cover"><span class="ph">🎵</span></div>
+      <div class="mini-info">
+        <span class="mini-title" id="m-title">未在播放</span>
+        <span class="mini-artist" id="m-artist">—</span>
+      </div>
+      <div class="mini-winbtns">
+        <button id="m-restore" title="还原主窗口">⤢</button>
+        <button id="m-close" title="关闭迷你播放器">✕</button>
+      </div>
+    </div>
+    <div class="mini-lyric" id="m-lyric"></div>
+    <div class="mini-progress-wrap">
+      <span class="mini-time" id="m-cur">0:00</span>
+      <div class="mini-progress" id="m-progress">
+        <div class="mini-progress-fill" id="m-fill"></div>
+      </div>
+      <span class="mini-time right" id="m-dur">0:00</span>
+    </div>
+    <div class="mini-controls">
+      <button class="side-btn" id="m-prev" title="上一首">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+      </button>
+      <button class="play-btn" id="m-play" title="播放/暂停">
+        <svg id="m-play-icon" viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="side-btn" id="m-next" title="下一首">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+      </button>
+    </div>
+  </div>
+  <script src="js/mini.js"></script>
+</body>
+</html>
