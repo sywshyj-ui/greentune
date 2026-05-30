@@ -19,7 +19,7 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     backgroundColor: '#121212',
-    title: '浩哥的Music',
+    title: '杨杨的专属Music',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -70,7 +70,7 @@ function createTray() {
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
   ]);
 
-  tray.setToolTip('浩哥的Music');
+  tray.setToolTip('杨杨的专属Music');
   tray.setContextMenu(contextMenu);
 
   // 双击托盘图标显示窗口
