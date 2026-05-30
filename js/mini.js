@@ -83,6 +83,25 @@ let pomodoroMinutes = 25;
 let pomodoroSeconds = 0;
 let pomodoroInterval = null;
 let pomodoroRunning = false;
+let pomodoroVisible = false;
+
+// 双击 mini 窗口切换番茄钟显示
+document.querySelector('.mini').addEventListener('dblclick', (e) => {
+  // 避免双击按钮时触发
+  if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+
+  pomodoroVisible = !pomodoroVisible;
+  const pomodoroEl = document.querySelector('.mini-pomodoro');
+  if (pomodoroVisible) {
+    pomodoroEl.classList.add('show');
+    // 通知主进程调整窗口高度
+    window.api.miniCommand('resize', { height: 220 });
+  } else {
+    pomodoroEl.classList.remove('show');
+    // 恢复原高度
+    window.api.miniCommand('resize', { height: 150 });
+  }
+});
 
 function updatePomodoroDisplay() {
   const m = String(pomodoroMinutes).padStart(2, '0');

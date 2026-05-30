@@ -276,7 +276,7 @@ function createMiniWindow() {
   }
   miniWindow = new BrowserWindow({
     width: 320,
-    height: 220,  // 增加高度以容纳番茄钟 (原150 -> 220)
+    height: 150,  // 默认高度，双击显示番茄钟时动态调整为220
     frame: false,
     resizable: false,
     transparent: true,
@@ -312,8 +312,17 @@ ipcMain.on('mini:close', () => {
   if (miniWindow && !miniWindow.isDestroyed()) miniWindow.close();
   if (mainWindow) mainWindow.show();
 });
-// 小窗 → 主窗：转发播放命令(toggle/prev/next/seek/ready)
+// 小窗 → 主窗：转发播放命令(toggle/prev/next/seek/ready/resize)
 ipcMain.on('mini:command', (_e, cmd, payload) => {
+  // 处理 resize 命令
+  if (cmd === 'resize' && miniWindow && !miniWindow.isDestroyed()) {
+    const { height } = payload;
+    const [width] = miniWindow.getSize();
+    miniWindow.setSize(width, height);
+    return;
+  }
+
+  // 其他命令转发给主窗
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('mini:command', cmd, payload);
   }
