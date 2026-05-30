@@ -18,12 +18,19 @@
       "!dist",
       "!.git",
       "!.gitignore",
-      "!README.md"
+      "!README.md",
+      "!*.log",
+      "!项目交接.md",
+      "!generate-icon.js",
+      "!build.log",
+      "!electron.log",
+      "!out.txt",
+      "!err.txt"
     ],
     "win": {
       "target": "portable",
-      "requestedExecutionLevel": "asInvoker",
-      "signAndEditExecutable": false
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
     },
     "portable": {
       "artifactName": "浩哥的Music-Portable.exe"
