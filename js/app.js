@@ -1670,14 +1670,13 @@ $('search-input').addEventListener('input', () => {
     clearTimeout(onlineTimer);
     onlineTimer = setTimeout(() => searchOnlineMusic($('search-input').value), 600);
   } else {
-    // 只在视图不是 search 时才切换视图并 render，避免每次输入都 render 导致焦点丢失
-    if (view !== 'search') {
-      view = 'search';
-      render();
-    } else {
-      // 已经在 search 视图，只需要重新渲染歌曲列表，不重新渲染整个页面
-      renderSongTable();
-    }
+    if (view !== 'search') view = 'search';
+    // 记录光标位置，render 后恢复焦点（搜索框是静态 DOM，render 不会重建它，但保险起见恢复焦点）
+    const inp = $('search-input');
+    const pos = inp.selectionStart;
+    render();
+    inp.focus();
+    try { inp.setSelectionRange(pos, pos); } catch (e) {}
   }
 });
 
