@@ -77,3 +77,82 @@ document.addEventListener('mouseup', (e) => {
 
 // 通知主窗：mini 已就绪，请推一次当前状态
 window.api.miniCommand('ready');
+
+// ===== 番茄钟功能 =====
+let pomodoroMinutes = 25;
+let pomodoroSeconds = 0;
+let pomodoroInterval = null;
+let pomodoroRunning = false;
+
+function updatePomodoroDisplay() {
+  const m = String(pomodoroMinutes).padStart(2, '0');
+  const s = String(pomodoroSeconds).padStart(2, '0');
+  $('p-time').textContent = `${m}:${s}`;
+}
+
+function startPomodoro() {
+  if (pomodoroRunning) return;
+  pomodoroRunning = true;
+  $('p-start').hidden = true;
+  $('p-pause').hidden = false;
+
+  pomodoroInterval = setInterval(() => {
+    if (pomodoroSeconds === 0) {
+      if (pomodoroMinutes === 0) {
+        // 时间到
+        stopPomodoro();
+        alert('⏰ 番茄钟时间到！休息一下吧~');
+        resetPomodoro();
+        return;
+      }
+      pomodoroMinutes--;
+      pomodoroSeconds = 59;
+    } else {
+      pomodoroSeconds--;
+    }
+    updatePomodoroDisplay();
+  }, 1000);
+}
+
+function pausePomodoro() {
+  if (!pomodoroRunning) return;
+  pomodoroRunning = false;
+  clearInterval(pomodoroInterval);
+  $('p-start').hidden = false;
+  $('p-pause').hidden = true;
+}
+
+function stopPomodoro() {
+  pomodoroRunning = false;
+  clearInterval(pomodoroInterval);
+  $('p-start').hidden = false;
+  $('p-pause').hidden = true;
+}
+
+function resetPomodoro() {
+  stopPomodoro();
+  pomodoroMinutes = 25;
+  pomodoroSeconds = 0;
+  updatePomodoroDisplay();
+}
+
+function setPomodoro(minutes) {
+  stopPomodoro();
+  pomodoroMinutes = minutes;
+  pomodoroSeconds = 0;
+  updatePomodoroDisplay();
+}
+
+// 事件绑定
+$('p-start').addEventListener('click', startPomodoro);
+$('p-pause').addEventListener('click', pausePomodoro);
+$('p-reset').addEventListener('click', resetPomodoro);
+
+document.querySelectorAll('.pomodoro-presets button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const minutes = parseInt(btn.dataset.minutes);
+    setPomodoro(minutes);
+  });
+});
+
+updatePomodoroDisplay();

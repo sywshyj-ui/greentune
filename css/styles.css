@@ -795,4 +795,79 @@ input:checked + .slider:before {
   padding: 40px 20px;
   font-size: 14px;
 }
+
+/* 定时关闭弹窗 */
+.timer-box {
+  width: 400px;
+  max-width: 90vw;
+}
+
+.timer-presets {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.timer-preset-btn {
+  padding: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.timer-preset-btn:hover {
+  background: var(--hover-bg);
+  border-color: var(--green);
+}
+
+.timer-custom {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 20px 0;
+  padding: 15px;
+  background: var(--card-bg);
+  border-radius: 8px;
+}
+
+.timer-custom label {
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.timer-custom input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.timer-status {
+  padding: 20px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  text-align: center;
+  margin: 20px 0;
+}
+
+.timer-status p {
+  font-size: 16px;
+  color: var(--text);
+  margin-bottom: 15px;
+}
+
+.timer-status span {
+  color: var(--green);
+  font-weight: bold;
+  font-size: 18px;
+}
 #mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

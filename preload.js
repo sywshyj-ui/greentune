@@ -50,5 +50,8 @@ contextBridge.exposeInMainWorld('api', {
   // 小窗监听状态推送
   onMiniSync: (cb) => ipcRenderer.on('mini:sync', (_e, state) => cb(state)),
   // 主窗监听小窗命令
-  onMiniCommand: (cb) => ipcRenderer.on('mini:command', (_e, cmd, payload) => cb(cmd, payload))
+  onMiniCommand: (cb) => ipcRenderer.on('mini:command', (_e, cmd, payload) => cb(cmd, payload)),
+
+  // ===== 定时关闭 =====
+  quitApp: () => ipcRenderer.send('quit-app')
 });

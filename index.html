@@ -15,6 +15,7 @@
     </div>
     <div class="tb-drag"></div>
     <div class="tb-right">
+      <button class="tb-btn" id="timer-btn" title="定时关闭">⏰</button>
       <button class="tb-btn" id="win-mini" title="迷你播放器">&#x2299;</button>
       <button class="tb-btn" id="win-min" title="最小化">&#x2014;</button>
       <button class="tb-btn" id="win-max" title="最大化">&#x25A1;</button>
@@ -257,6 +258,31 @@
       <div class="plugin-list" id="plugin-list"></div>
       <div class="modal-actions">
         <button class="ghost-btn" id="plugin-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 定时关闭弹窗 -->
+  <div class="modal" id="timer-modal" hidden>
+    <div class="modal-box timer-box">
+      <h3>⏰ 定时关闭</h3>
+      <div class="timer-presets">
+        <button class="timer-preset-btn" data-minutes="15">15分钟</button>
+        <button class="timer-preset-btn" data-minutes="30">30分钟</button>
+        <button class="timer-preset-btn" data-minutes="60">1小时</button>
+        <button class="timer-preset-btn" data-minutes="90">1.5小时</button>
+      </div>
+      <div class="timer-custom">
+        <label>自定义时间（分钟）：</label>
+        <input type="number" id="timer-custom-input" min="1" max="480" placeholder="输入分钟数">
+        <button class="primary-btn" id="timer-custom-set">设置</button>
+      </div>
+      <div class="timer-status" id="timer-status" hidden>
+        <p>将在 <span id="timer-remaining"></span> 后关闭应用</p>
+        <button class="ghost-btn" id="timer-cancel">取消定时</button>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost-btn" id="timer-close">关闭</button>
       </div>
     </div>
   </div>

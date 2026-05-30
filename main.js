@@ -276,7 +276,7 @@ function createMiniWindow() {
   }
   miniWindow = new BrowserWindow({
     width: 320,
-    height: 150,
+    height: 220,  // 增加高度以容纳番茄钟 (原150 -> 220)
     frame: false,
     resizable: false,
     transparent: true,
@@ -979,3 +979,8 @@ ipcMain.handle('source:lyric', async (_e, sourceId, musicItem) => {
   }
 });
 
+// ===== 定时关闭 =====
+ipcMain.on('quit-app', () => {
+  app.isQuitting = true;
+  app.quit();
+});

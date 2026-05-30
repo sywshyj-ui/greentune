@@ -1670,8 +1670,14 @@ $('search-input').addEventListener('input', () => {
     clearTimeout(onlineTimer);
     onlineTimer = setTimeout(() => searchOnlineMusic($('search-input').value), 600);
   } else {
-    if (view !== 'search') view = 'search';
-    render();
+    // 只在视图不是 search 时才切换视图并 render，避免每次输入都 render 导致焦点丢失
+    if (view !== 'search') {
+      view = 'search';
+      render();
+    } else {
+      // 已经在 search 视图，只需要重新渲染歌曲列表，不重新渲染整个页面
+      renderSongTable();
+    }
   }
 });
 
@@ -2199,6 +2205,99 @@ function openPluginModal() {
 // 关闭插件管理弹窗
 $('plugin-close').addEventListener('click', () => {
   $('plugin-modal').hidden = true;
+});
+
+// ===== 定时关闭功能 =====
+let shutdownTimer = null;
+let shutdownTime = null;
+let shutdownInterval = null;
+
+function updateTimerDisplay() {
+  if (!shutdownTime) return;
+  const now = Date.now();
+  const remaining = Math.max(0, shutdownTime - now);
+  const minutes = Math.floor(remaining / 60000);
+  const seconds = Math.floor((remaining % 60000) / 1000);
+  $('timer-remaining').textContent = `${minutes}分${seconds}秒`;
+
+  if (remaining <= 0) {
+    clearInterval(shutdownInterval);
+    window.api.quitApp();
+  }
+}
+
+function startShutdownTimer(minutes) {
+  // 取消现有定时器
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+    clearInterval(shutdownInterval);
+  }
+
+  shutdownTime = Date.now() + minutes * 60000;
+
+  // 显示状态
+  $('timer-status').hidden = false;
+  updateTimerDisplay();
+
+  // 每秒更新显示
+  shutdownInterval = setInterval(updateTimerDisplay, 1000);
+
+  // 设置定时器
+  shutdownTimer = setTimeout(() => {
+    window.api.quitApp();
+  }, minutes * 60000);
+
+  // 更新按钮提示
+  $('timer-btn').title = `定时关闭 (${minutes}分钟后)`;
+  $('timer-btn').style.color = 'var(--green)';
+}
+
+function cancelShutdownTimer() {
+  if (shutdownTimer) {
+    clearTimeout(shutdownTimer);
+    clearInterval(shutdownInterval);
+    shutdownTimer = null;
+    shutdownTime = null;
+  }
+  $('timer-status').hidden = true;
+  $('timer-btn').title = '定时关闭';
+  $('timer-btn').style.color = '';
+}
+
+// 打开定时关闭弹窗
+$('timer-btn').addEventListener('click', () => {
+  $('timer-modal').hidden = false;
+});
+
+// 关闭定时关闭弹窗
+$('timer-close').addEventListener('click', () => {
+  $('timer-modal').hidden = true;
+});
+
+// 预设时间按钮
+document.querySelectorAll('.timer-preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const minutes = parseInt(btn.dataset.minutes);
+    startShutdownTimer(minutes);
+    $('timer-modal').hidden = true;
+  });
+});
+
+// 自定义时间
+$('timer-custom-set').addEventListener('click', () => {
+  const minutes = parseInt($('timer-custom-input').value);
+  if (minutes > 0 && minutes <= 480) {
+    startShutdownTimer(minutes);
+    $('timer-modal').hidden = true;
+    $('timer-custom-input').value = '';
+  } else {
+    alert('请输入1-480之间的分钟数');
+  }
+});
+
+// 取消定时
+$('timer-cancel').addEventListener('click', () => {
+  cancelShutdownTimer();
 });
 
 // 从文件加载插件

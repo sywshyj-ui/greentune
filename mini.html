@@ -119,6 +119,60 @@
     }
     .mini-controls .play-btn:hover { transform: scale(1.06); }
     svg { display: block; }
+    /* 番茄钟 */
+    .mini-pomodoro {
+      padding: 8px 12px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      -webkit-app-region: no-drag;
+    }
+    .pomodoro-display {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .pomodoro-time {
+      font-size: 16px;
+      font-weight: bold;
+      color: var(--green);
+      font-family: 'Courier New', monospace;
+    }
+    .pomodoro-btns {
+      display: flex;
+      gap: 6px;
+    }
+    .pomodoro-btns button {
+      padding: 4px 10px;
+      border: none;
+      background: rgba(255,255,255,0.1);
+      color: var(--text);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: background 0.15s;
+    }
+    .pomodoro-btns button:hover {
+      background: rgba(255,255,255,0.15);
+    }
+    .pomodoro-presets {
+      display: flex;
+      gap: 4px;
+    }
+    .pomodoro-presets button {
+      flex: 1;
+      padding: 4px;
+      border: none;
+      background: rgba(255,255,255,0.08);
+      color: var(--text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 10px;
+      transition: all 0.15s;
+    }
+    .pomodoro-presets button:hover {
+      background: rgba(255,255,255,0.12);
+      color: var(--text);
+    }
   </style>
 </head>
 <body>
@@ -152,6 +206,22 @@
       <button class="side-btn" id="m-next" title="下一首">
         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
       </button>
+    </div>
+    <!-- 番茄钟 -->
+    <div class="mini-pomodoro">
+      <div class="pomodoro-display">
+        <span class="pomodoro-time" id="p-time">25:00</span>
+        <div class="pomodoro-btns">
+          <button id="p-start" title="开始">▶</button>
+          <button id="p-pause" title="暂停" hidden>⏸</button>
+          <button id="p-reset" title="重置">↻</button>
+        </div>
+      </div>
+      <div class="pomodoro-presets">
+        <button data-minutes="25">25分</button>
+        <button data-minutes="15">15分</button>
+        <button data-minutes="5">5分</button>
+      </div>
     </div>
   </div>
   <script src="js/mini.js"></script>
