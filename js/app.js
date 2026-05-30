@@ -85,6 +85,11 @@ function coverHTML(path, fallback = '🎵') {
   const c = coverOf(path);
   return c ? `<img src="${c}" alt="">` : fallback;
 }
+// 左下角播放器专用:无封面时回退到原来的头像图片,这样旋转动画始终有 <img> 可作用
+function playerCoverHTML(path) {
+  const c = coverOf(path);
+  return `<img src="${c || 'assets/logo.jpg'}" alt="">`;
+}
 
 // ===== 视图渲染 =====
 const VIEW_TITLES = { home: '主页', search: '搜索结果', library: '音乐库', favorites: '我喜欢', recent: '最近播放', online: '在线搜索', recommend: '为你推荐' };
@@ -156,6 +161,7 @@ function render() {
   const table = $('song-table');
 
   // —— 在线类视图(搜索/推荐/导入的在线歌单)单独渲染,不走本地空状态逻辑 ——
+  $('refresh-recommend').hidden = (view !== 'recommend');
   if (view === 'online' || view === 'recommend') {
     $('view-count').textContent = onlineResults.length ? `${onlineResults.length} 首歌曲` : '';
     renderOnlineRows(onlineResults, view === 'recommend' ? '推荐' : '在线',
@@ -660,6 +666,7 @@ function showContextMenu(x, y, path) {
   })) : [{ label: '(暂无歌单,先新建)', disabled: true }] });
   items.push({ label: '📋 复制歌曲名', fn: () => copyText(s.title) });
   if (inPl) items.push({ label: '✕ 从此歌单移除', fn: () => removeFromPlaylist(path, inPl) });
+  if (view === 'favorites') items.push({ label: '✕ 从我喜欢移除', fn: () => toggleFav(path) });
   if (view === 'recent') items.push({ label: '✕ 从最近播放移除', fn: () => removeFromRecent(path) });
   items.push({ label: '🔄 补全歌曲信息', fn: () => completeSongInfo(path) });
   items.push({ sep: true });
@@ -700,6 +707,32 @@ function showContextMenu(x, y, path) {
     if (s2.disabled) return;
     el.addEventListener('click', (e) => { e.stopPropagation(); s2.fn(); closeContextMenu(); });
   });
+
+  // 子菜单 hover-intent:进入父项即打开,离开后延迟关闭,避免斜向移动时秒关导致"点不中";
+  // 同时按可用空间把子菜单翻到左侧/上方,防止溢出屏幕。
+  menu.querySelectorAll('.ctx-item.has-sub').forEach((parent) => {
+    const sub = parent.querySelector('.ctx-sub');
+    if (!sub) return;
+    let timer = null;
+    const open = () => {
+      clearTimeout(timer);
+      parent.classList.add('open');
+      // 先默认右侧,放不下则翻到左侧
+      sub.style.left = '100%'; sub.style.right = 'auto';
+      sub.style.top = '-4px'; sub.style.bottom = 'auto';
+      const r = sub.getBoundingClientRect();
+      if (r.right > window.innerWidth - 8) { sub.style.left = 'auto'; sub.style.right = '100%'; }
+      if (r.bottom > window.innerHeight - 8) { sub.style.top = 'auto'; sub.style.bottom = '-4px'; }
+    };
+    const scheduleClose = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => parent.classList.remove('open'), 350);
+    };
+    parent.addEventListener('mouseenter', open);
+    parent.addEventListener('mouseleave', scheduleClose);
+    sub.addEventListener('mouseenter', () => clearTimeout(timer));
+    sub.addEventListener('mouseleave', scheduleClose);
+  });
 }
 
 function closeContextMenu() {
@@ -710,41 +743,73 @@ document.addEventListener('click', closeContextMenu);
 document.addEventListener('scroll', closeContextMenu, true);
 
 // ===== 频谱可视化 =====
+let visLevels = null;   // 各柱当前高度(0~1),用于帧间平滑
+let visStarted = false; // rAF 循环是否已启动(只启动一次)
+const VIS_BARS = 16;       // 柱子数量
+const VIS_CAP = 1.0;       // 柱子最高可到顶
+const VIS_RISE = 0.5;      // 上升平滑系数(快)
+const VIS_FALL = 0.18;     // 下落平滑系数(慢)
 function drawVisualizer() {
+  if (visStarted) return; // 防止重复启动叠加多个 rAF 循环
+  visStarted = true;
   const canvas = $('visualizer');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
 
-  const barCount = 16;
-  const barWidth = w / barCount;
+  const barWidth = w / VIS_BARS;
+  visLevels = new Array(VIS_BARS).fill(0);
 
   function draw() {
     requestAnimationFrame(draw);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.fillRect(0, 0, w, h);
+    ctx.clearRect(0, 0, w, h);
 
     const playing = currentPath && !audio.paused;
     const hasReal = analyser && dataArray;
     if (hasReal) analyser.getByteFrequencyData(dataArray);
-    const step = hasReal ? Math.floor(dataArray.length / barCount) : 0;
-    // 在线播放无法接 Web Audio(跨域会静音),用播放时间驱动伪频谱,让音符也跳动
+    const bins = hasReal ? dataArray.length : 0;
     const t = audio.currentTime || 0;
 
-    for (let i = 0; i < barCount; i++) {
-      let val;
-      if (hasReal) {
-        val = dataArray[i * step] / 255;               // 本地:真实频谱
-      } else if (playing) {
-        // 在线:多个正弦叠加做出高低起伏的假跳动(0~1)
-        val = (Math.sin(t * 6 + i * 0.7) + Math.sin(t * 11 + i * 1.9) + 2) / 4 * (0.5 + 0.5 * Math.abs(Math.sin(t * 3 + i)));
+    for (let i = 0; i < VIS_BARS; i++) {
+      let target;
+      // 每根柱子各自的相位种子,保证跳动节奏互不相同、高低错落看着随机
+      const seed = i * 1.7 + 0.5;
+      if (playing) {
+        // 随机起伏:多正弦叠加,每根柱子相位不同 → 全部都在跳,高度各异
+        const wiggle = 0.4
+          + 0.22 * Math.sin(t * 5.0 + seed)
+          + 0.16 * Math.sin(t * 9.0 + seed * 2.3)
+          + 0.12 * Math.sin(t * 14.0 + seed * 0.7);
+        if (hasReal) {
+          // 本地真实频谱:线性切分频段,每根柱子分到独立的一段频率区间取平均
+          // (不再用对数映射,避免前几根全挤进同一个低频 bin 导致不跳)
+          const lo = Math.floor((i / VIS_BARS) * bins);
+          const hi = Math.max(lo + 1, Math.floor(((i + 1) / VIS_BARS) * bins));
+          let sum = 0;
+          for (let b = lo; b < hi && b < bins; b++) sum += dataArray[b];
+          const real = Math.min(1, (sum / (hi - lo)) / 255 * 1.6);
+          // 真实能量与随机起伏取较大值,没能量的柱子也跳,不会出现"死柱"
+          target = Math.max(real, wiggle * 0.7);
+        } else {
+          // 在线音频跨域接不了 Web Audio,纯用随机起伏驱动
+          target = wiggle;
+        }
       } else {
-        val = 0;                                        // 暂停/未播放:静止
+        target = 0; // 暂停/未播放:落回底部
       }
-      const barHeight = Math.max(val * h * 0.9, playing ? 2 : 1);
+
+      // 平滑:上升快、下落慢,柱子起伏更自然
+      const prev = visLevels[i];
+      visLevels[i] = target > prev
+        ? prev + (target - prev) * VIS_RISE
+        : prev + (target - prev) * VIS_FALL;
+      // 所有柱子统一限高,谁都不顶到画布最顶
+      const val = Math.min(visLevels[i], VIS_CAP);
+
+      const barHeight = Math.max(val * h * 0.95, playing ? 2 : 1);
       const x = i * barWidth;
       const y = h - barHeight;
-      ctx.fillStyle = playing ? `rgba(29, 185, 84, ${0.6 + val * 0.4})` : '#3a3a3a';
+      ctx.fillStyle = playing ? `rgba(29, 185, 84, ${0.55 + val * 0.45})` : '#3a3a3a';
       ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
     }
   }
@@ -791,6 +856,39 @@ function renderPlaylists() {
         showOnlinePlaylistMenu(e.clientX, e.clientY, oplId);
       });
     }
+    // 固定项「我喜欢 / 最近播放」右键:清空列表
+    const v = el.dataset.view;
+    if (v === 'favorites' || v === 'recent') {
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        showFixedListMenu(e.clientX, e.clientY, v);
+      });
+    }
+  });
+}
+
+// ===== 固定项「我喜欢 / 最近播放」右键菜单 =====
+function showFixedListMenu(x, y, which) {
+  closeContextMenu();
+  const isFav = which === 'favorites';
+  const label = isFav ? '我喜欢' : '最近播放';
+  const count = isFav ? favorites.length : recent.length;
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `<div class="ctx-item danger" data-action="clear">🗑 清空${label}</div>`;
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+  menu.querySelector('[data-action="clear"]').addEventListener('click', () => {
+    closeContextMenu();
+    if (!count) { toast(label + '已经是空的'); return; }
+    if (!confirm(`确定清空${label}列表吗?(共 ${count} 首)`)) return;
+    if (isFav) { favorites = []; LS.set('favorites', favorites); }
+    else { recent = []; LS.set('recent', recent); }
+    renderPlaylists();
+    render();
   });
 }
 
@@ -916,7 +1014,7 @@ function playPath(path) {
   $('now-title').textContent = s.title;
   $('now-artist').textContent = s.artist;
   const coverEl = $('now-cover');
-  coverEl.innerHTML = coverHTML(path);
+  coverEl.innerHTML = playerCoverHTML(path);
   coverEl.classList.add('rotating');
   $('like-btn').classList.toggle('liked', favorites.includes(path));
   $('like-btn').textContent = favorites.includes(path) ? '♥' : '♡';
@@ -1246,8 +1344,8 @@ const volBar = setupBar('vol-bar', 'vol-fill', 'vol-knob', (r) => {
 });
 
 // ===== audio 事件 =====
-audio.addEventListener('play', () => setPlayIcon(true));
-audio.addEventListener('pause', () => setPlayIcon(false));
+audio.addEventListener('play', () => { setPlayIcon(true); $('now-cover').classList.remove('paused'); });
+audio.addEventListener('pause', () => { setPlayIcon(false); $('now-cover').classList.add('paused'); });
 audio.addEventListener('ended', onEnded);
 audio.addEventListener('loadedmetadata', () => {
   $('dur-time').textContent = fmt(audio.duration);
@@ -1416,6 +1514,12 @@ document.querySelectorAll('.nav-main .nav-item').forEach((n) => {
     if (view === 'recommend') loadRecommendations();
     render();
   });
+});
+
+// 推荐视图「换一批」:重新随机生成推荐
+$('refresh-recommend').addEventListener('click', () => {
+  if (view !== 'recommend') return;
+  loadRecommendations();
 });
 
 // 搜索
@@ -1787,7 +1891,7 @@ async function loadRecommendations() {
 
   const topArtists = Object.entries(artistCount)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
+    .slice(0, 5)
     .map(([artist]) => artist);
 
   if (!topArtists.length) {
@@ -1796,9 +1900,12 @@ async function loadRecommendations() {
   }
 
   try {
-    // 搜索热门艺术家的歌曲
-    const keyword = topArtists[0];
-    onlineResults = await window.api.qqSearch(keyword, 30);
+    // 从最常听的几个艺术家里随机挑一个搜索,「换一批」时结果会变化
+    const keyword = topArtists[Math.floor(Math.random() * topArtists.length)];
+    let results = await window.api.qqSearch(keyword, 30);
+    // 打乱顺序,让每次"换一批"更有新鲜感
+    results = (results || []).sort(() => Math.random() - 0.5);
+    onlineResults = results;
     render();
   } catch (e) {
     console.error('推荐加载失败:', e);
@@ -1848,5 +1955,6 @@ function init() {
   renderPlaylists();
   render();
   repairGarbledTitles(); // 自动修复旧的乱码标题
+  drawVisualizer();      // 启动频谱循环,纯在线播放时音柱也能跳
 }
 init();

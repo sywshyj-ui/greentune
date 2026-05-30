@@ -29,6 +29,19 @@ function createWindow() {
   });
   mainWindow.loadFile('index.html');
 
+  // 在输入框/可编辑区域右键时,弹出 剪切/复制/粘贴/全选 菜单
+  mainWindow.webContents.on('context-menu', (_e, params) => {
+    if (!params.isEditable) return; // 只在可编辑元素上弹
+    const menu = Menu.buildFromTemplate([
+      { role: 'cut', label: '剪切', enabled: params.editFlags.canCut },
+      { role: 'copy', label: '复制', enabled: params.editFlags.canCopy },
+      { role: 'paste', label: '粘贴', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', label: '全选' }
+    ]);
+    menu.popup({ window: mainWindow });
+  });
+
   // 阻止窗口真正关闭,改为隐藏到托盘
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {

@@ -88,6 +88,7 @@
         <div class="view-head">
           <h1 id="view-title">主页</h1>
           <span class="view-count" id="view-count"></span>
+          <button class="refresh-btn" id="refresh-recommend" hidden>🔄 换一批</button>
         </div>
 
         <!-- 歌曲列表 -->
@@ -126,7 +127,7 @@
   <!-- 播放条 -->
   <footer class="player">
     <div class="player-left">
-      <div class="now-cover rotating" id="now-cover">
+      <div class="now-cover rotating paused" id="now-cover">
         <img src="assets/logo.jpg" alt="Logo">
       </div>
       <canvas id="visualizer" width="120" height="56"></canvas>
