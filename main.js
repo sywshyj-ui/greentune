@@ -272,20 +272,8 @@ ipcMain.handle('netease-playlist', async (_e, id) => {
 // ---- 下载在线音频到本地 ----
 // 渲染层先用 qq-url 解析出试听地址,再调用本接口。弹保存对话框让用户选位置,
 // 然后用 Node 原生 https/http 把音频流写到磁盘。返回 {ok,path} 或 {ok:false,error};取消返回 null。
-ipcMain.handle('download-file', async (_e, url, suggestedName) => {
-  if (!url) return null;
-  // 从 URL 推断扩展名,缺省 m4a(QQ 试听多为 m4a)
-  const extMatch = url.split('?')[0].match(/\.(mp3|m4a|flac|ogg|wav|aac)$/i);
-  const ext = extMatch ? extMatch[1].toLowerCase() : 'm4a';
-  // 清掉文件名里的非法字符
-  const safeName = (suggestedName || 'download').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
-  const r = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${safeName}.${ext}`,
-    filters: [{ name: 'Audio', extensions: [ext] }]
-  });
-  if (r.canceled || !r.filePath) return null;
-  const dest = r.filePath;
-  // 用 Node 原生 https/http 下载,绕开 Electron net 被拦截(ERR_BLOCKED_BY_CLIENT)的问题
+// 下载核心:把 url 的内容写到 dest 文件,处理重定向。返回 {ok,path} 或 {ok:false,error}
+function downloadUrlTo(url, dest) {
   return new Promise((resolve) => {
     const doGet = (u, redirects) => {
       if (redirects > 5) { resolve({ ok: false, error: '重定向次数过多' }); return; }
@@ -309,6 +297,47 @@ ipcMain.handle('download-file', async (_e, url, suggestedName) => {
     };
     doGet(url, 0);
   });
+}
+
+// 从 url 推断音频扩展名,缺省 m4a(QQ 试听多为 m4a)
+function audioExtFromUrl(url) {
+  const m = url.split('?')[0].match(/\.(mp3|m4a|flac|ogg|wav|aac)$/i);
+  return m ? m[1].toLowerCase() : 'm4a';
+}
+// 清掉文件名里的非法字符
+function safeFileName(name) {
+  return (name || 'download').replace(/[\\/:*?"<>|]/g, '_').slice(0, 120);
+}
+
+ipcMain.handle('download-file', async (_e, url, suggestedName) => {
+  if (!url) return null;
+  const ext = audioExtFromUrl(url);
+  const safeName = safeFileName(suggestedName);
+  const r = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: `${safeName}.${ext}`,
+    filters: [{ name: 'Audio', extensions: [ext] }]
+  });
+  if (r.canceled || !r.filePath) return null;
+  return downloadUrlTo(url, r.filePath);
+});
+
+// ---- 选择一个保存文件夹(批量下载用,只弹一次) ----
+ipcMain.handle('pick-save-dir', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths[0];
+});
+
+// ---- 下载到指定文件夹(不弹保存框,批量下载用) ----
+// 重名自动加 (1)(2) 后缀避免覆盖
+ipcMain.handle('download-to-dir', async (_e, url, dir, suggestedName) => {
+  if (!url || !dir) return { ok: false, error: '参数缺失' };
+  const ext = audioExtFromUrl(url);
+  const base = safeFileName(suggestedName);
+  let dest = path.join(dir, `${base}.${ext}`);
+  let n = 1;
+  while (fs.existsSync(dest)) { dest = path.join(dir, `${base} (${n}).${ext}`); n++; }
+  return downloadUrlTo(url, dest);
 });
 
 // ---- 复制文本到系统剪贴板 ----

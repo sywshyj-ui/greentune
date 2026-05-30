@@ -351,7 +351,23 @@ function renderOnlinePlaylistRows(opl) {
     </div>`;
   }).join('');
   body.querySelectorAll('.st-row').forEach((row) => {
-    row.addEventListener('click', () => playFromOnlinePlaylist(opl.id, +row.dataset.oplIdx));
+    // 单击=选中(支持 Ctrl 多选 / Shift 区间选),双击才播放
+    row.addEventListener('click', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        row.classList.toggle('selected');
+      } else if (e.shiftKey) {
+        const rows = Array.from(body.querySelectorAll('.st-row'));
+        const cur = rows.indexOf(row);
+        let last = rows.findIndex((r) => r.classList.contains('selected'));
+        if (last < 0) last = cur;
+        const [a, b] = [Math.min(last, cur), Math.max(last, cur)];
+        for (let i = a; i <= b; i++) rows[i].classList.add('selected');
+      } else {
+        body.querySelectorAll('.st-row').forEach((r) => r.classList.remove('selected'));
+        row.classList.add('selected');
+      }
+    });
+    row.addEventListener('dblclick', () => playFromOnlinePlaylist(opl.id, +row.dataset.oplIdx));
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showOnlineSongMenu(e.clientX, e.clientY, opl.id, +row.dataset.oplIdx);
@@ -359,37 +375,113 @@ function renderOnlinePlaylistRows(opl) {
   });
 }
 
-// 在线歌单内单首歌的右键菜单(目前仅删除)
+// 在线歌单内歌曲的右键菜单:支持对多选项批量删除/下载
 function showOnlineSongMenu(x, y, plId, idx) {
   closeContextMenu();
   const opl = onlinePlaylists.find((p) => p.id === plId);
   if (!opl || !opl.songs[idx]) return;
   const song = opl.songs[idx];
+
+  // 右键行为(同本地列表):右键的行若不在已选集合里,就单独选中它;
+  // 若右键的是已选中的行(多选),则对全部选中项批量操作。
+  const body = $('song-body');
+  let selRows = Array.from(body.querySelectorAll('.st-row.selected'));
+  let selIdxs = selRows.map((r) => +r.dataset.oplIdx).filter((n) => !isNaN(n));
+  if (!selIdxs.includes(idx)) {
+    body.querySelectorAll('.st-row').forEach((r) => r.classList.remove('selected'));
+    const thisRow = body.querySelector(`.st-row[data-opl-idx="${idx}"]`);
+    if (thisRow) thisRow.classList.add('selected');
+    selIdxs = [idx];
+  }
+  const multi = selIdxs.length > 1;
+
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.id = 'ctx-menu';
-  menu.innerHTML = `
-    <div class="ctx-item" data-action="dl">⬇ 下载到本地</div>
-    <div class="ctx-item" data-action="copy">📋 复制歌曲名</div>
-    <div class="ctx-sep"></div>
-    <div class="ctx-item danger" data-action="del">🗑 从歌单删除</div>`;
+  if (multi) {
+    menu.innerHTML = `
+      <div class="ctx-item" data-action="dl">⬇ 下载选中的 ${selIdxs.length} 首</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item danger" data-action="del">🗑 从歌单删除选中的 ${selIdxs.length} 首</div>`;
+  } else {
+    menu.innerHTML = `
+      <div class="ctx-item" data-action="play">▶ 播放</div>
+      <div class="ctx-item" data-action="dl">⬇ 下载到本地</div>
+      <div class="ctx-item" data-action="copy">📋 复制歌曲名</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item danger" data-action="del">🗑 从歌单删除</div>`;
+  }
   document.body.appendChild(menu);
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   menu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
-  menu.querySelector('[data-action="dl"]').addEventListener('click', () => {
+
+  const play = menu.querySelector('[data-action="play"]');
+  if (play) play.addEventListener('click', () => {
     closeContextMenu();
-    downloadPlaylistSong(song);
+    playFromOnlinePlaylist(plId, idx);
   });
-  menu.querySelector('[data-action="copy"]').addEventListener('click', () => {
+  const copy = menu.querySelector('[data-action="copy"]');
+  if (copy) copy.addEventListener('click', () => {
     closeContextMenu();
     copyText(song.name);
   });
+  menu.querySelector('[data-action="dl"]').addEventListener('click', () => {
+    closeContextMenu();
+    if (multi) downloadOnlineSongs(plId, selIdxs);
+    else downloadPlaylistSong(song);
+  });
   menu.querySelector('[data-action="del"]').addEventListener('click', () => {
     closeContextMenu();
-    if (!confirm(`确定从歌单删除「${song.name}」吗?`)) return;
-    deleteOnlineSong(plId, idx);
+    if (multi) {
+      if (!confirm(`确定从歌单删除选中的 ${selIdxs.length} 首吗?`)) return;
+      deleteOnlineSongs(plId, selIdxs);
+    } else {
+      if (!confirm(`确定从歌单删除「${song.name}」吗?`)) return;
+      deleteOnlineSong(plId, idx);
+    }
   });
+}
+
+// 批量下载在线歌单里的多首歌:只弹一次文件夹选择框,然后全部自动存进去
+async function downloadOnlineSongs(plId, idxs) {
+  const opl = onlinePlaylists.find((p) => p.id === plId);
+  if (!opl) return;
+  // 复制一份歌曲引用,避免下载过程中索引因删除等变化
+  const songs = idxs.map((i) => opl.songs[i]).filter(Boolean);
+  if (!songs.length) return;
+
+  // 只弹一次:让用户选保存文件夹
+  const dir = await window.api.pickSaveDir();
+  if (!dir) return; // 用户取消
+
+  let ok = 0, fail = 0;
+  const total = songs.length;
+  for (let i = 0; i < songs.length; i++) {
+    const meta = songs[i];
+    toast(`下载中 ${i + 1}/${total}:${meta.name}`);
+    try {
+      const realArtist = meta.artist && meta.artist !== 'Unknown Artist' ? meta.artist : '';
+      const q = (meta.name + ' ' + realArtist).trim();
+      const results = await window.api.qqSearch(q, 1);
+      const song = results && results[0];
+      if (!song || !song.id) { fail++; continue; }
+      const playUrl = await window.api.qqUrl(song.id);
+      if (!playUrl) { fail++; continue; } // 付费/会员歌曲
+      const r = await window.api.downloadToDir(playUrl, dir, `${meta.name} - ${meta.artist}`);
+      if (r && r.ok) ok++; else fail++;
+    } catch (e) {
+      console.error('批量下载失败:', meta.name, e);
+      fail++;
+    }
+  }
+  alert(`下载完成:成功 ${ok} 首${fail ? `,失败 ${fail} 首(多为付费/会员歌曲)` : ''}\n保存位置:${dir}`);
+}
+
+// 批量从在线歌单删除多首歌:按索引从大到小删,避免前面删除导致后面索引错位
+function deleteOnlineSongs(plId, idxs) {
+  const sorted = [...idxs].sort((a, b) => b - a);
+  for (const i of sorted) deleteOnlineSong(plId, i);
 }
 
 // 下载在线歌单里的一首歌:歌单只有网易云元数据,先用歌名+歌手经 QQ 解析出试听地址再下载
@@ -1682,14 +1774,25 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown' && !typing) { e.preventDefault(); volume = Math.max(0, (audio.volume||0) - 0.05); audio.volume = volume; volBar.apply(volume); LS.set('volume', volume); }
   else if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); view = 'search'; render(); $('search-input').focus(); }
   else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A') && !typing) {
-    // Ctrl+A 全选当前列表所有歌曲(在线视图不适用)
-    if (view === 'online' || view === 'recommend' || view.startsWith('opl:')) return;
+    // Ctrl+A 全选当前列表所有歌曲(在线搜索/推荐不支持,导入的歌单 opl: 支持)
+    if (view === 'online' || view === 'recommend') return;
     e.preventDefault();
     document.querySelectorAll('.st-row').forEach((r) => r.classList.add('selected'));
   }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
-    // 删除选中的歌曲(本地视图);在线视图不支持
-    if (view === 'online' || view === 'recommend' || view.startsWith('opl:')) return;
+    if (view === 'online' || view === 'recommend') return;
+    // 在线歌单视图:删除选中的歌(从歌单移除)
+    if (view.startsWith('opl:')) {
+      const plId = view.slice(4);
+      const idxs = Array.from(document.querySelectorAll('.st-row.selected'))
+        .map((r) => +r.dataset.oplIdx).filter((n) => !isNaN(n));
+      if (!idxs.length) return;
+      e.preventDefault();
+      if (!confirm(`确定从歌单删除选中的 ${idxs.length} 首吗?`)) return;
+      deleteOnlineSongs(plId, idxs);
+      return;
+    }
+    // 本地视图:从音乐库删除选中的歌
     const sel = Array.from(document.querySelectorAll('.st-row.selected'))
       .map((r) => r.dataset.path).filter(Boolean);
     if (!sel.length) return;

@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('api', {
   neteasePlaylist: (id) => ipcRenderer.invoke('netease-playlist', id),
   // 下载在线音频到本地(弹保存对话框)
   downloadFile: (url, suggestedName) => ipcRenderer.invoke('download-file', url, suggestedName),
+  // 选择一个保存文件夹(批量下载用,只弹一次)
+  pickSaveDir: () => ipcRenderer.invoke('pick-save-dir'),
+  // 下载到指定文件夹(不弹保存框,批量下载用)
+  downloadToDir: (url, dir, suggestedName) => ipcRenderer.invoke('download-to-dir', url, dir, suggestedName),
   // 英文歌词翻译成中文(传入字符串数组,返回等长译文数组)
   translateLines: (lines) => ipcRenderer.invoke('translate-lines', lines),
   // 复制文本到系统剪贴板(交主进程写,最稳妥)
