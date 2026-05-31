@@ -2131,7 +2131,7 @@ async function repairGarbledTitles() {
 }
 
 // ===== 初始化 =====
-function init() {
+async function init() {
   applyTheme();
   audio.volume = volume;
   volBar.apply(volume);
@@ -2140,7 +2140,7 @@ function init() {
   render();
   repairGarbledTitles(); // 自动修复旧的乱码标题
   drawVisualizer();      // 启动频谱循环,纯在线播放时音柱也能跳
-  loadPlugins();         // 加载插件列表
+  await loadPlugins();   // 等待插件列表加载完成，确保 currentSource 正确初始化
 }
 init();
 
