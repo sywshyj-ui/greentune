@@ -1204,19 +1204,52 @@ async function loadLyrics(path) {
   const box = $('lp-lyrics');
   box.innerHTML = '<p class="lp-placeholder">正在加载歌词…</p>';
 
+  console.log('[歌词] 开始加载:', path);
+
   // 先尝试本地
   let data = await window.api.loadLrc(path);
-  if (path !== currentPath) return;
+  if (path !== currentPath) {
+    console.log('[歌词] 已切歌，中止加载');
+    return;
+  }
 
   // 本地没有,尝试在线搜索(只要有标题就搜,歌手可缺省)
   if (!data || !data.length) {
+    console.log('[歌词] 本地无歌词，准备联网搜索');
     const s = byPath(path);
+    if (!s) {
+      console.warn('[歌词] 找不到歌曲信息:', path);
+      box.innerHTML = '<p class="lp-placeholder">暂无歌词（放一个同名 .lrc 文件,或联网自动搜索）</p>';
+      return;
+    }
+
+    console.log('[歌词] 歌曲信息:', {title: s.title, artist: s.artist});
     const realArtist = s && s.artist && s.artist !== 'Unknown Artist' ? s.artist : '';
+
     if (s && s.title) {
       box.innerHTML = '<p class="lp-placeholder">本地无歌词,正在联网搜索…</p>';
-      data = await searchOnlineLyrics(s.title, realArtist, path);  // 传入 path 用于缓存
-      if (path !== currentPath) return;
+      try {
+        data = await searchOnlineLyrics(s.title, realArtist, path);  // 传入 path 用于缓存
+        if (path !== currentPath) {
+          console.log('[歌词] 搜索期间已切歌，中止');
+          return;
+        }
+        if (!data || !data.length) {
+          console.warn('[歌词] 联网搜索未找到歌词');
+          box.innerHTML = '<p class="lp-placeholder">联网搜索未找到歌词</p>';
+          return;
+        }
+        console.log('[歌词] 联网搜索成功，找到', data.length, '行');
+      } catch (e) {
+        console.error('[歌词] 联网搜索失败:', e);
+        box.innerHTML = '<p class="lp-placeholder">联网搜索失败: ' + e.message + '</p>';
+        return;
+      }
+    } else {
+      console.warn('[歌词] 歌曲无标题，无法搜索');
     }
+  } else {
+    console.log('[歌词] 使用本地歌词，共', data.length, '行');
   }
 
   if (!data || !data.length) {
@@ -1271,18 +1304,22 @@ async function maybeTranslateLyrics(path, data) {
 
 // 在线歌词搜索(QQ 音乐 API,无需 key)
 async function searchOnlineLyrics(title, artist, filePath) {
+  console.log('[歌词搜索] 开始:', {title, artist, filePath});
+
   // 检查是否有可用的音源插件
   if (!currentSource) {
-    console.warn('无可用音源插件，跳过在线歌词搜索');
-    return null;
+    console.error('[歌词搜索] currentSource 为空，无可用音源插件');
+    throw new Error('无可用音源插件，请在插件管理中启用至少一个音源');
   }
+
+  console.log('[歌词搜索] 使用音源:', currentSource);
 
   // 优先使用文件路径作为缓存键（本地歌曲），否则用 title+artist（在线歌曲）
   const cacheKey = filePath ? `lrc_file_${filePath}` : (artist ? `lrc_${title}_${artist}` : null);
   if (cacheKey) {
     const cached = LS.get(cacheKey, null);
     if (cached) {
-      console.log('使用缓存的歌词:', cacheKey);
+      console.log('[歌词搜索] 使用缓存:', cacheKey, '共', cached.length, '行');
       return cached;
     }
   }
@@ -1290,20 +1327,36 @@ async function searchOnlineLyrics(title, artist, filePath) {
   try {
     // 通过当前音源搜索歌曲(歌手可为空)
     const query = (title + ' ' + (artist || '')).trim();
+    console.log('[歌词搜索] 搜索关键词:', query);
+
     const result = await window.api.sourceSearch(currentSource, query, 1, 'music');
+    console.log('[歌词搜索] 搜索结果:', result);
+
     const song = result.data && result.data[0];
-    if (!song || !song.id) return null;
+    if (!song || !song.id) {
+      console.warn('[歌词搜索] 未找到匹配歌曲');
+      return null;
+    }
+
+    console.log('[歌词搜索] 找到歌曲:', song.title || song.name, 'ID:', song.id);
 
     // 获取歌词
     const raw = await window.api.sourceLyric(currentSource, song);
-    if (!raw) return null;
+    console.log('[歌词搜索] 歌词原始数据长度:', raw ? raw.length : 0);
+
+    if (!raw) {
+      console.warn('[歌词搜索] 插件返回空歌词');
+      return null;
+    }
 
     // 解析 LRC
     const lines = parseLRC(raw);
+    console.log('[歌词搜索] 解析后行数:', lines.length);
+
     if (lines.length) {
       if (cacheKey) {
         LS.set(cacheKey, lines); // 缓存歌词
-        console.log('歌词已缓存:', cacheKey);
+        console.log('[歌词搜索] 歌词已缓存:', cacheKey);
       }
       return lines;
     }
