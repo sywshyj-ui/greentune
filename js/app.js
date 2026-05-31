@@ -1214,7 +1214,7 @@ async function loadLyrics(path) {
     const realArtist = s && s.artist && s.artist !== 'Unknown Artist' ? s.artist : '';
     if (s && s.title) {
       box.innerHTML = '<p class="lp-placeholder">本地无歌词,正在联网搜索…</p>';
-      data = await searchOnlineLyrics(s.title, realArtist);
+      data = await searchOnlineLyrics(s.title, realArtist, path);  // 传入 path 用于缓存
       if (path !== currentPath) return;
     }
   }
@@ -1270,18 +1270,21 @@ async function maybeTranslateLyrics(path, data) {
 }
 
 // 在线歌词搜索(QQ 音乐 API,无需 key)
-async function searchOnlineLyrics(title, artist) {
+async function searchOnlineLyrics(title, artist, filePath) {
   // 检查是否有可用的音源插件
   if (!currentSource) {
     console.warn('无可用音源插件，跳过在线歌词搜索');
     return null;
   }
 
-  // 仅在有歌手时才用缓存:否则两首同名无歌手的歌会共用缓存键而串词
-  const cacheKey = artist ? `lrc_${title}_${artist}` : null;
+  // 优先使用文件路径作为缓存键（本地歌曲），否则用 title+artist（在线歌曲）
+  const cacheKey = filePath ? `lrc_file_${filePath}` : (artist ? `lrc_${title}_${artist}` : null);
   if (cacheKey) {
     const cached = LS.get(cacheKey, null);
-    if (cached) return cached;
+    if (cached) {
+      console.log('使用缓存的歌词:', cacheKey);
+      return cached;
+    }
   }
 
   try {
@@ -1298,7 +1301,10 @@ async function searchOnlineLyrics(title, artist) {
     // 解析 LRC
     const lines = parseLRC(raw);
     if (lines.length) {
-      if (cacheKey) LS.set(cacheKey, lines); // 仅有歌手时缓存
+      if (cacheKey) {
+        LS.set(cacheKey, lines); // 缓存歌词
+        console.log('歌词已缓存:', cacheKey);
+      }
       return lines;
     }
   } catch (e) {
